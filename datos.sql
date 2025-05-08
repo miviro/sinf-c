@@ -56,3 +56,12 @@ INSERT INTO Espectaculo_TipoUsuario (espectaculo_id, tipo_usuario) VALUES
 -- Sample Transaccion
 INSERT INTO Transaccion (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
 VALUES ('1234-5678-9012-3456', 'compra', 1, '2024-07-01', 'PalacioDeportes', 1, 'Adulto');
+
+-- falla por evento no permite Bebe
+INSERT INTO Transaccion (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
+VALUES ('1234-5678-9012-3456', 'compra', 1, '2024-07-01', 'PalacioDeportes', 1, 'Bebe');
+
+
+-- falla por misma localidad aun siendo distinto tipo de usuario
+INSERT INTO Transaccion (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
+VALUES ('9876-5432-1098-7654', 'compra', 1, '2024-07-01', 'PalacioDeportes', 1, 'Jubilado');
