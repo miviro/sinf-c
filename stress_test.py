@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timedelta
 import string
 import subprocess
+from tqdm import tqdm
 
 # Database configuration
 DB_CONFIG = {
@@ -32,7 +33,7 @@ def test_clients(cursor, num_tests):
     
     # Prepare bulk insert data
     batch_size = 1000
-    for i in range(0, num_tests, batch_size):
+    for i in tqdm(range(0, num_tests, batch_size), desc="Inserting clients"):
         try:
             current_batch = min(batch_size, num_tests - i)
             values = [(generate_random_string(20),) for _ in range(current_batch)]
@@ -51,16 +52,15 @@ def test_recintos(cursor, num_tests):
     print("\nTest 2: Inserting random recintos...")
     start_time = time.time()
     
-    for _ in range(num_tests):
+    for i in tqdm(range(0, num_tests, batch_size), desc="Inserting recintos"):
         try:
-            id_nombre = generate_random_string(15)
-            aforo_max = random.randint(100, 10000)
-            cursor.execute("INSERT INTO Recinto (id_nombre, aforo_max) VALUES (%s, %s)",
-                         (id_nombre, aforo_max))
-            successful += 1
+            current_batch = min(batch_size, num_tests - i)
+            values = [(generate_random_string(15), random.randint(100, 10000)) for _ in range(current_batch)]
+            cursor.executemany("INSERT INTO Recinto (id_nombre, aforo_max) VALUES (%s, %s)", values)
+            successful += current_batch
         except Exception as e:
-            failed += 1
-            print(f"Error inserting recinto: {e}")
+            failed += current_batch
+            print(f"Error inserting batch of recintos: {e}")
     
     end_time = time.time()
     return successful, failed, end_time - start_time
@@ -72,17 +72,16 @@ def test_espectaculos(cursor, num_tests):
     start_time = time.time()
     
     tipos = ['Deportivo', 'Musical', 'Educativo']
-    for _ in range(num_tests):
+    for i in tqdm(range(0, num_tests, batch_size), desc="Inserting espectaculos"):
         try:
-            id_espectaculo = random.randint(1, 10000)
-            nombre = generate_random_string(20)
-            tipo = random.choice(tipos)
-            cursor.execute("INSERT INTO Espectaculo (id_espectaculo, nombre, tipo) VALUES (%s, %s, %s)",
-                         (id_espectaculo, nombre, tipo))
-            successful += 1
+            current_batch = min(batch_size, num_tests - i)
+            values = [(random.randint(1, 10000), generate_random_string(20), random.choice(tipos)) 
+                     for _ in range(current_batch)]
+            cursor.executemany("INSERT INTO Espectaculo (id_espectaculo, nombre, tipo) VALUES (%s, %s, %s)", values)
+            successful += current_batch
         except Exception as e:
-            failed += 1
-            print(f"Error inserting espectaculo: {e}")
+            failed += current_batch
+            print(f"Error inserting batch of espectaculos: {e}")
     
     end_time = time.time()
     return successful, failed, end_time - start_time
@@ -93,7 +92,7 @@ def test_complex_queries(cursor, num_tests):
     print("\nTest 4: Running complex queries...")
     start_time = time.time()
     
-    for _ in range(num_tests):
+    for _ in tqdm(range(num_tests), desc="Running queries"):
         try:
             cursor.execute("""
                 SELECT t.id_transaccion, c.datos_bancarios, e.nombre
@@ -121,6 +120,9 @@ def reset_database():
         )
         cursor = conn.cursor()
         
+        # Drop and recreate database
+        cursor.execute("DROP DATABASE IF EXISTS mydb")
+        cursor.execute("CREATE DATABASE mydb")
         cursor.close()
         conn.close()
         
