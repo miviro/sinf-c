@@ -41,7 +41,6 @@ CREATE TABLE Localidad (
   fecha DATETIME,
   recinto_id VARCHAR(255),
   espectaculo_id INT,
-  -- estado ENUM ("reservado", "libre", "preservado") NOT NULL,
   PRIMARY KEY (ubicacion, fecha, recinto_id, espectaculo_id),
   FOREIGN KEY (fecha, recinto_id, espectaculo_id) REFERENCES Evento(fecha, recinto_id, espectaculo_id)
 );
@@ -332,8 +331,10 @@ LEFT JOIN Transaccion ON Transaccion.recinto_id = Coste.recinto_id
    AND Transaccion.fecha = Coste.fecha
    AND Transaccion.espectaculo_id = Coste.espectaculo_id
    AND Transaccion.ubicacion = Coste.ubicacion
-WHERE Transaccion.ubicacion IS NULL 
-   OR Transaccion.estado = 'Anulada'
+JOIN Evento on Evento.espectaculo_id = Coste.espectaculo_id
+WHERE (Transaccion.ubicacion IS NULL OR Transaccion.estado = 'Anulada')
+      AND Evento.estado = 'Abierto'
+      
 GROUP BY Coste.fecha, Coste.recinto_id, Coste.espectaculo_id, Coste.precio, Coste.tipo_usuario, Coste.ubicacion;
 
 
@@ -342,34 +343,21 @@ DROP VIEW IF EXISTS Vista_Top10_espectaculos;
 
 CREATE VIEW Vista_Top10_espectaculos AS
 SELECT 
-    Espectaculo.id_espectaculo,
-    Espectaculo.nombre AS nombre_espectaculo,
-    SUM(CASE WHEN Transaccion.estado = 'compra' THEN Coste.precio ELSE 0 END) AS beneficios_totales
-FROM Espectaculo 
-JOIN Evento ON Evento.espectaculo_id = Espectaculo.id_espectaculo
-JOIN Localidad ON Localidad.fecha = Evento.fecha
-                AND Localidad.recinto_id = Evento.recinto_id
-                AND Localidad.espectaculo_id = Evento.espectaculo_id
-
-JOIN Coste ON Coste.ubicacion = Localidad.ubicacion
-            AND Coste.fecha = Localidad.fecha
-            AND Coste.recinto_id = Localidad.recinto_id
-            AND Coste.espectaculo_id = Localidad.espectaculo_id
-            AND Coste.tipo_usuario IN (
-                SELECT tipo_usuario
-                FROM Espectaculo_TipoUsuario
-                WHERE espectaculo_id = Espectaculo.id_espectaculo
-            )
-
-LEFT JOIN Transaccion ON Transaccion.ubicacion = Coste.ubicacion
-                        AND Transaccion.fecha = Coste.fecha
-                        AND Transaccion.recinto_id = Coste.recinto_id
-                        AND Transaccion.espectaculo_id = Coste.espectaculo_id
-                        AND Transaccion.tipo_usuario = Coste.tipo_usuario
-
-GROUP BY Espectaculo.id_espectaculo, Espectaculo.nombre
+    e.id_espectaculo,
+    e.nombre AS nombre_espectaculo,
+    SUM(c.precio) AS beneficios_totales
+FROM Transaccion t
+JOIN Coste c ON t.ubicacion = c.ubicacion
+            AND t.fecha = c.fecha
+            AND t.recinto_id = c.recinto_id
+            AND t.espectaculo_id = c.espectaculo_id
+            AND t.tipo_usuario = c.tipo_usuario
+JOIN Espectaculo e ON t.espectaculo_id = e.id_espectaculo
+WHERE t.estado = 'compra'
+GROUP BY e.id_espectaculo, e.nombre
 ORDER BY beneficios_totales DESC
 LIMIT 10;
+
 
 -- ========================================
 -- USUARIOS Y PERMISOS

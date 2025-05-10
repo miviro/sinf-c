@@ -879,25 +879,6 @@ def generar_benchmark_sql():
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor()
         
-        # Obtener clientes existentes o crear nuevos si no hay suficientes
-        cursor.execute("SELECT datos_bancarios FROM Cliente LIMIT 1000")
-        clientes = [row[0] for row in cursor.fetchall()]
-        
-        if len(clientes) < 100:
-            console.print("[bold yellow]Creando clientes para el benchmark...")
-            for i in tqdm(range(1000), desc="Creando clientes"):
-                datos_bancarios = f"BENCH_{random.randint(1000, 9999)}"
-                try:
-                    cursor.execute("INSERT INTO Cliente (datos_bancarios) VALUES (%s)", (datos_bancarios,))
-                    clientes.append(datos_bancarios)
-                except mysql.connector.Error as err:
-                    if err.errno == 1062:  # Duplicate entry error
-                        continue
-            conn.commit()
-            
-            cursor.execute("SELECT datos_bancarios FROM Cliente LIMIT 1000")
-            clientes = [row[0] for row in cursor.fetchall()]
-        
         # Obtener localidades disponibles con sus tipos de usuario permitidos
         cursor.execute("""
             SELECT 
@@ -933,45 +914,6 @@ def generar_benchmark_sql():
                 localidades_por_evento[key] = []
             localidades_por_evento[key].append((ubicacion, tipos_usuario.split(',')))
         
-        # Primero crear las reservas necesarias para las anulaciones
-        console.print("[bold blue]Creando reservas iniciales para anulaciones...")
-        reservas_creadas = []
-        reservas_necesarias = min(num_anulaciones, len(localidades_disponibles))
-        
-        with tqdm(total=reservas_necesarias, desc="Creando reservas iniciales") as pbar:
-            for _ in range(reservas_necesarias):
-                eventos_disponibles = [k for k, v in localidades_por_evento.items() if v]
-                if not eventos_disponibles:
-                    break
-                
-                evento = random.choice(eventos_disponibles)
-                fecha, recinto_id, espectaculo_id = evento
-                ubicacion, tipos_usuario = random.choice(localidades_por_evento[evento])
-                localidades_por_evento[evento].remove((ubicacion, tipos_usuario))
-                
-                datos_bancarios = random.choice(clientes)
-                tipo_usuario = random.choice(tipos_usuario)  # Seleccionar solo de los tipos permitidos
-                
-                try:
-                    cursor.execute("""
-                        INSERT INTO Transaccion 
-                        (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (datos_bancarios, 'reserva', ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario))
-                    
-                    reservas_creadas.append((datos_bancarios, fecha, recinto_id, espectaculo_id, ubicacion))
-                    pbar.update(1)
-                except mysql.connector.Error as err:
-                    if err.errno == 1062:  # Duplicate entry error
-                        continue
-                    raise
-        
-        conn.commit()
-        
-        if not reservas_creadas:
-            console.print("[bold red]No se pudieron crear reservas para el benchmark.")
-            return
-        
         # Generar archivo SQL
         console.print("[bold blue]Generando archivo SQL para benchmark...")
         
@@ -983,6 +925,13 @@ def generar_benchmark_sql():
             # Generar declaraciones de variables para reutilización
             f.write("-- Variables para reutilización\n")
             f.write("SET @start_time = NOW();\n\n")
+            
+            # Crear clientes para el benchmark
+            f.write("-- Crear clientes para el benchmark\n")
+            for i in range(1000):
+                datos_bancarios = f"BENCH_{random.randint(1000, 9999)}"
+                f.write(f"INSERT INTO Cliente (datos_bancarios) VALUES ('{datos_bancarios}');\n")
+            f.write("\n")
             
             # Preparar listas de operaciones
             operaciones = []
@@ -1021,7 +970,7 @@ def generar_benchmark_sql():
                         ubicacion, tipos_usuario = random.choice(localidades_por_evento[evento])
                         localidades_por_evento[evento].remove((ubicacion, tipos_usuario))
                         
-                        datos_bancarios = random.choice(clientes)
+                        datos_bancarios = f"BENCH_{random.randint(1000, 9999)}"
                         tipo_usuario = random.choice(tipos_usuario)  # Seleccionar solo de los tipos permitidos
                         
                         f.write(f"""-- Compra {compras_generadas + 1}
@@ -1040,7 +989,7 @@ INSERT INTO Transaccion
                         ubicacion, tipos_usuario = random.choice(localidades_por_evento[evento])
                         localidades_por_evento[evento].remove((ubicacion, tipos_usuario))
                         
-                        datos_bancarios = random.choice(clientes)
+                        datos_bancarios = f"BENCH_{random.randint(1000, 9999)}"
                         tipo_usuario = random.choice(tipos_usuario)  # Seleccionar solo de los tipos permitidos
                         
                         f.write(f"""-- Reserva {reservas_generadas + 1}
@@ -1049,12 +998,31 @@ INSERT INTO Transaccion
         VALUES ('{datos_bancarios}', 'reserva', {ubicacion}, '{fecha}', '{recinto_id}', {espectaculo_id}, '{tipo_usuario}');\n""")
                         reservas_generadas += 1
                         
-                    elif tipo == 'anulacion' and anulaciones_generadas < num_anulaciones and reservas_creadas:
+                    elif tipo == 'anulacion' and anulaciones_generadas < num_anulaciones:
                         # Obtener una reserva aleatoria de las creadas
-                        reserva = random.choice(reservas_creadas)
-                        datos_bancarios, fecha, recinto_id, espectaculo_id, ubicacion = reserva
+                        if not reservas_generadas:
+                            continue
+                            
+                        # Seleccionar un evento aleatorio que tenga localidades disponibles
+                        eventos_disponibles = [k for k, v in localidades_por_evento.items() if v]
+                        if not eventos_disponibles:
+                            continue
                         
-                        f.write(f"""-- Anulación {anulaciones_generadas + 1}
+                        evento = random.choice(eventos_disponibles)
+                        fecha, recinto_id, espectaculo_id = evento
+                        ubicacion, tipos_usuario = random.choice(localidades_por_evento[evento])
+                        localidades_por_evento[evento].remove((ubicacion, tipos_usuario))
+                        
+                        datos_bancarios = f"BENCH_{random.randint(1000, 9999)}"
+                        tipo_usuario = random.choice(tipos_usuario)  # Seleccionar solo de los tipos permitidos
+                        
+                        # Primero crear la reserva
+                        f.write(f"""-- Crear reserva para anulación {anulaciones_generadas + 1}
+INSERT INTO Transaccion 
+        (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
+        VALUES ('{datos_bancarios}', 'reserva', {ubicacion}, '{fecha}', '{recinto_id}', {espectaculo_id}, '{tipo_usuario}');
+
+-- Anulación {anulaciones_generadas + 1}
 SELECT id_transaccion INTO @transaccion_id 
 FROM Transaccion 
 WHERE datos_bancarios = '{datos_bancarios}' 
@@ -1067,7 +1035,6 @@ LIMIT 1;
 
 CALL cancelar_reserva(@transaccion_id, '{datos_bancarios}');\n""")
                         anulaciones_generadas += 1
-                        reservas_creadas.remove(reserva)  # Remover la reserva usada
                     
                     pbar.update(1)
             
