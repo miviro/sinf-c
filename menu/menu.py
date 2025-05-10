@@ -267,11 +267,8 @@ def poblar_base_datos():
             VALUES (%s, %s, %s, %s, %s, %s)
         """
         
-        # Pre-generate random price indices for each user type (0-3)
-        # This avoids repeated random.randint calls later
-        num_tipos = len(tipos_usuarios)
         # Use larger size for random indices array
-        random_tipo_indices = np.random.randint(0, 4, size=(min(len(eventos), 1000), 5000, num_tipos))
+        random_tipo_indices = np.random.randint(0, 4, size=(min(len(eventos), 1000), 5000, len(tipos_usuarios)))
         
         # Mantener un contador para cada evento
         localidades_por_evento = {}
@@ -298,10 +295,22 @@ def poblar_base_datos():
                     # Verificar si todavía hay espacio en este evento según el aforo
                     if localidades_actuales >= aforo:
                         continue
+                    
+                    # Obtener los tipos de usuario permitidos para este espectáculo
+                    cursor.execute("""
+                        SELECT tipo_usuario 
+                        FROM Espectaculo_TipoUsuario
+                        WHERE espectaculo_id = %s
+                    """, (esp_id,))
+                    tipos_permitidos = [row[0] for row in cursor.fetchall()]
+                    
+                    if not tipos_permitidos:
+                        console.print(f"[bold yellow]El espectáculo {esp_id} no tiene tipos de usuario permitidos, saltando...")
+                        continue
                         
                     # Pre-calculate prices for this event and all user types (once per event)
                     precios_por_tipo = {}
-                    for tipo_idx, tipo in enumerate(tipos_usuarios):
+                    for tipo in tipos_permitidos:
                         # Use hash of event data as seed for deterministic but different values
                         seed_val = hash(f"{fecha}{rec_id}{esp_id}{tipo}") % (2**32)
                         np.random.seed(seed_val)
@@ -344,12 +353,13 @@ def poblar_base_datos():
                         for ubicacion_idx, ubicacion in enumerate(range(chunk_start, chunk_end + 1)):
                             localidades_batch.append((ubicacion, fecha, rec_id, esp_id))
                             
-                            for tipo_idx, tipo in enumerate(tipos_usuarios):
+                            for tipo in tipos_permitidos:
+                                tipo_idx = tipos_usuarios.index(tipo)
                                 # Use pre-generated random indices, with modulo to avoid out of bounds
                                 rand_evento_idx = evento_idx % min(len(eventos), 1000)
                                 rand_ubicacion_idx = ubicacion_idx % 5000
-                                tipo_precio = random_tipo_indices[rand_evento_idx][rand_ubicacion_idx][tipo_idx]
-                                precio = precios_por_tipo[tipo][tipo_precio]
+                                tipo_precio_idx = random_tipo_indices[rand_evento_idx][rand_ubicacion_idx][tipo_idx]
+                                precio = precios_por_tipo[tipo][tipo_precio_idx % len(precios_por_tipo[tipo])]
                                 costes_batch.append((ubicacion, fecha, rec_id, esp_id, tipo, precio))
                         
                         try:

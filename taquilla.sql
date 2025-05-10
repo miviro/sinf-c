@@ -63,7 +63,8 @@ CREATE TABLE Coste (
   precio INT NOT NULL,
   PRIMARY KEY (ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario),
   FOREIGN KEY (ubicacion, fecha, recinto_id, espectaculo_id) REFERENCES Localidad(ubicacion, fecha, recinto_id, espectaculo_id),
-  FOREIGN KEY (tipo_usuario) REFERENCES TiposDeUsuarios(tipo_usuario)
+  FOREIGN KEY (tipo_usuario) REFERENCES TiposDeUsuarios(tipo_usuario),
+  FOREIGN KEY (espectaculo_id, tipo_usuario) REFERENCES Espectaculo_TipoUsuario(espectaculo_id, tipo_usuario)
 );
 
 CREATE TABLE Transaccion (
