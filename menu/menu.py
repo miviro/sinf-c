@@ -23,6 +23,11 @@ DB_CONFIG = {
     'database': 'mydb'
 }
 
+# Configuración de la simulación
+SIM_CONFIG = {
+    'stop_on_error': False  # Cambiar a False para continuar la simulación después de errores
+}
+
 # Variables globales para estadísticas
 stats = {
     'transacciones_totales': 0,
@@ -77,20 +82,43 @@ def poblar_base_datos():
         ]
         
         for esp in tqdm(espectaculos, desc="Insertando Espectáculos"):
-            cursor.execute("INSERT INTO Espectaculo (id_espectaculo, nombre, tipo) VALUES (%s, %s, %s)", esp)
+            try:
+                cursor.execute("""
+                    INSERT INTO Espectaculo (id_espectaculo, nombre, tipo) 
+                    VALUES (%s, %s, %s)
+                """, esp)
+            except mysql.connector.Error as err:
+                if err.errno == 1062:  # Duplicate entry error
+                    continue
+                raise
         
         # Poblar Tipos de Usuarios
         console.print("\n[bold blue]Poblando Tipos de Usuarios...")
         tipos_usuarios = ['Jubilado', 'Adulto', 'Infantil', 'Parado', 'Bebe']
         for tipo in tqdm(tipos_usuarios, desc="Insertando Tipos de Usuarios"):
-            cursor.execute("INSERT INTO TiposDeUsuarios (tipo_usuario) VALUES (%s)", (tipo,))
+            try:
+                cursor.execute("""
+                    INSERT INTO TiposDeUsuarios (tipo_usuario) 
+                    VALUES (%s)
+                """, (tipo,))
+            except mysql.connector.Error as err:
+                if err.errno == 1062:  # Duplicate entry error
+                    continue
+                raise
         
         # Poblar Espectaculo_TipoUsuario
         console.print("\n[bold blue]Poblando Relaciones Espectáculo-TipoUsuario...")
         for esp_id in tqdm(range(1, 6), desc="Creando Relaciones"):
             for tipo in tipos_usuarios:
-                cursor.execute("INSERT INTO Espectaculo_TipoUsuario (espectaculo_id, tipo_usuario) VALUES (%s, %s)",
-                             (esp_id, tipo))
+                try:
+                    cursor.execute("""
+                        INSERT INTO Espectaculo_TipoUsuario (espectaculo_id, tipo_usuario) 
+                        VALUES (%s, %s)
+                    """, (esp_id, tipo))
+                except mysql.connector.Error as err:
+                    if err.errno == 1062:  # Duplicate entry error
+                        continue
+                    raise
         
         # Poblar Recintos
         console.print("\n[bold blue]Poblando Recintos...")
@@ -103,7 +131,15 @@ def poblar_base_datos():
         ]
         
         for rec in tqdm(recintos, desc="Insertando Recintos"):
-            cursor.execute("INSERT INTO Recinto (id_nombre, aforo_max) VALUES (%s, %s)", rec)
+            try:
+                cursor.execute("""
+                    INSERT INTO Recinto (id_nombre, aforo_max) 
+                    VALUES (%s, %s)
+                """, rec)
+            except mysql.connector.Error as err:
+                if err.errno == 1062:  # Duplicate entry error
+                    continue
+                raise
         
         # Poblar Eventos
         console.print("\n[bold blue]Poblando Eventos...")
@@ -111,23 +147,31 @@ def poblar_base_datos():
         for fecha in tqdm(fechas, desc="Creando Eventos"):
             for rec_id, _ in recintos:
                 for esp_id in range(1, 6):
-                    cursor.execute("""
-                        INSERT INTO Evento (fecha, recinto_id, espectaculo_id, estado, fecha_fin, cancelaciones)
-                        VALUES (%s, %s, %s, 'Abierto', %s, 0)
-                    """, (fecha, rec_id, esp_id, fecha))
+                    try:
+                        cursor.execute("""
+                            INSERT INTO Evento (fecha, recinto_id, espectaculo_id, estado, fecha_fin, cancelaciones)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (fecha, rec_id, esp_id, 'Abierto', fecha, 0))
+                    except mysql.connector.Error as err:
+                        if err.errno == 1062:  # Duplicate entry error
+                            continue
+                        raise
         
         # Poblar Localidades y Costes
         console.print("\n[bold blue]Poblando Localidades y Costes...")
+        
+        # Preparar todos los datos en memoria
+        localidades_batch = []
+        costes_batch = []
+        batch_size = 1000  # Reducido para mejor manejo de errores
+        
         for fecha in tqdm(fechas, desc="Procesando Fechas"):
             for rec_id, aforo in recintos:
                 for esp_id in range(1, 6):
-                    # Primero, generar los 4 tipos de precios para cada tipo de usuario en este evento
+                    # Generar precios para este evento
                     precios_por_tipo = {}
                     for tipo in tipos_usuarios:
-                        # Usar una semilla basada en el evento y tipo de usuario para generar precios consistentes
                         random.seed(f"{fecha}{rec_id}{esp_id}{tipo}")
-                        
-                        # Definir rangos de precios por tipo de usuario
                         rangos_precios = {
                             'Jubilado': (15, 45),
                             'Adulto': (30, 80),
@@ -135,51 +179,75 @@ def poblar_base_datos():
                             'Parado': (15, 45),
                             'Bebe': (5, 25)
                         }
-                        
-                        # Generar 4 precios únicos dentro del rango
                         precios = set()
                         while len(precios) < 4:
                             min_precio, max_precio = rangos_precios[tipo]
                             precio = random.randint(min_precio, max_precio)
                             precios.add(precio)
-                        
-                        # Guardar los 4 precios ordenados
                         precios_por_tipo[tipo] = sorted(list(precios))
                     
-                    # Preparar datos para inserciones en lote
-                    localidades_batch = []
-                    costes_batch = []
-                    
-                    # Crear localidades y costes en lote
-                    for ubicacion in range(1, min(aforo + 1, 1001)):  # Limitamos a 1000 localidades por evento
-                        # Añadir localidad al lote
-                        localidades_batch.append((ubicacion, fecha, rec_id, esp_id))
-                        
-                        # Para cada tipo de usuario, añadir coste al lote
-                        for tipo in tipos_usuarios:
-                            tipo_precio = random.randint(0, 3)  # Índice del tipo de precio (0-3)
-                            precio = precios_por_tipo[tipo][tipo_precio]
-                            costes_batch.append((ubicacion, fecha, rec_id, esp_id, tipo, precio))
-                    
-                    # Insertar localidades en lote
-                    cursor.executemany("""
-                        INSERT INTO Localidad (ubicacion, fecha, recinto_id, espectaculo_id)
-                        VALUES (%s, %s, %s, %s)
-                    """, localidades_batch)
-                    
-                    # Insertar costes en lote
-                    cursor.executemany("""
-                        INSERT INTO Coste (ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario, precio)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                    """, costes_batch)
-                    
-                    # Hacer commit después de cada evento para no sobrecargar la memoria
-                    conn.commit()
+                    # Crear localidades y costes para este evento
+                    for ubicacion in range(1, min(aforo + 1, 1001)):
+                        try:
+                            localidades_batch.append((ubicacion, fecha, rec_id, esp_id))
+                            
+                            for tipo in tipos_usuarios:
+                                tipo_precio = random.randint(0, 3)
+                                precio = precios_por_tipo[tipo][tipo_precio]
+                                costes_batch.append((ubicacion, fecha, rec_id, esp_id, tipo, precio))
+                            
+                            # Hacer commit cada batch_size registros
+                            if len(localidades_batch) >= batch_size:
+                                try:
+                                    cursor.executemany("""
+                                        INSERT INTO Localidad (ubicacion, fecha, recinto_id, espectaculo_id)
+                                        VALUES (%s, %s, %s, %s)
+                                    """, localidades_batch)
+                                    
+                                    cursor.executemany("""
+                                        INSERT INTO Coste (ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario, precio)
+                                        VALUES (%s, %s, %s, %s, %s, %s)
+                                    """, costes_batch)
+                                    
+                                    conn.commit()
+                                    localidades_batch = []
+                                    costes_batch = []
+                                except mysql.connector.Error as err:
+                                    if err.errno == 1062:  # Duplicate entry error
+                                        localidades_batch = []
+                                        costes_batch = []
+                                        continue
+                                    raise
+                        except Exception as e:
+                            console.print(f"[bold red]Error al procesar ubicación {ubicacion}: {e}")
+                            continue
+        
+        # Insertar registros restantes
+        if localidades_batch:
+            try:
+                cursor.executemany("""
+                    INSERT INTO Localidad (ubicacion, fecha, recinto_id, espectaculo_id)
+                    VALUES (%s, %s, %s, %s)
+                """, localidades_batch)
+                
+                cursor.executemany("""
+                    INSERT INTO Coste (ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario, precio)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, costes_batch)
+                
+                conn.commit()
+            except mysql.connector.Error as err:
+                if err.errno == 1062:  # Duplicate entry error
+                    pass
+                else:
+                    raise
         
         console.print("[bold green]¡Base de datos poblada con éxito!")
         
     except Exception as e:
         console.print(f"[bold red]Error al poblar la base de datos: {e}")
+        if 'conn' in locals():
+            conn.rollback()
     finally:
         if 'cursor' in locals():
             cursor.close()
@@ -309,7 +377,28 @@ def ver_evento():
         if 'conn' in locals():
             conn.close()
 
-def simular_usuarios(num_usuarios, prob_compra, prob_reserva, prob_cancelacion, duracion, console):
+def simular():
+    """Interfaz para configurar y ejecutar la simulación"""
+    console = Console()
+    
+    try:
+        num_usuarios = int(Prompt.ask("\nNúmero de clientes a crear", default="1000"))
+        compras_por_segundo = float(Prompt.ask("Tasa de compras por segundo", default="20"))
+        reservas_por_segundo = float(Prompt.ask("Tasa de reservas por segundo", default="15"))
+        anulaciones_por_segundo = float(Prompt.ask("Tasa de anulaciones por segundo", default="5"))
+        duracion = int(Prompt.ask("Duración de la simulación en segundos", default="60"))
+        
+        if compras_por_segundo < 0 or reservas_por_segundo < 0 or anulaciones_por_segundo < 0:
+            console.print("[bold red]Las tasas no pueden ser negativas")
+            return
+        
+        console.print("\n[bold yellow]Iniciando simulación...")
+        simular_usuarios(num_usuarios, compras_por_segundo, reservas_por_segundo, anulaciones_por_segundo, duracion, console)
+        
+    except ValueError as e:
+        console.print(f"[bold red]Error en los parámetros: {e}")
+
+def simular_usuarios(num_usuarios, compras_por_segundo, reservas_por_segundo, anulaciones_por_segundo, duracion, console):
     """Simula usuarios realizando transacciones en tiempo real"""
     global stats
     stats = {
@@ -319,7 +408,9 @@ def simular_usuarios(num_usuarios, prob_compra, prob_reserva, prob_cancelacion, 
         'cancelaciones': 0,
         'errores': 0,
         'tiempos_respuesta': [],
-        'tiempo_inicio': time.time()
+        'tiempo_inicio': time.time(),
+        'errores_detalle': {},
+        'ultimos_errores': []
     }
     
     # Cola para comunicación entre hilos
@@ -327,6 +418,7 @@ def simular_usuarios(num_usuarios, prob_compra, prob_reserva, prob_cancelacion, 
     
     # Hilo para mostrar estadísticas
     def mostrar_stats():
+        ultima_actualizacion = 0
         while True:
             try:
                 # Obtener estadísticas de la cola
@@ -334,10 +426,22 @@ def simular_usuarios(num_usuarios, prob_compra, prob_reserva, prob_cancelacion, 
                 if nueva_stats == "STOP":
                     break
                 
+                # Actualizar solo cada segundo
+                tiempo_actual = time.time()
+                if tiempo_actual - ultima_actualizacion < 1.0:
+                    continue
+                
+                ultima_actualizacion = tiempo_actual
+                
                 # Calcular estadísticas
-                tiempo_transcurrido = time.time() - stats['tiempo_inicio']
+                tiempo_transcurrido = tiempo_actual - stats['tiempo_inicio']
                 tps = stats['transacciones_totales'] / tiempo_transcurrido if tiempo_transcurrido > 0 else 0
                 tiempo_promedio = statistics.mean(stats['tiempos_respuesta']) if stats['tiempos_respuesta'] else 0
+                
+                # Calcular tasas por segundo
+                compras_por_segundo_actual = stats['compras'] / tiempo_transcurrido if tiempo_transcurrido > 0 else 0
+                reservas_por_segundo_actual = stats['reservas'] / tiempo_transcurrido if tiempo_transcurrido > 0 else 0
+                anulaciones_por_segundo_actual = stats['cancelaciones'] / tiempo_transcurrido if tiempo_transcurrido > 0 else 0
                 
                 # Obtener uso de CPU y memoria
                 cpu_percent = psutil.cpu_percent()
@@ -350,17 +454,31 @@ def simular_usuarios(num_usuarios, prob_compra, prob_reserva, prob_cancelacion, 
                 
                 table.add_row("Tiempo Transcurrido", f"{tiempo_transcurrido:.2f}s")
                 table.add_row("Transacciones Totales", str(stats['transacciones_totales']))
-                table.add_row("Compras", str(stats['compras']))
-                table.add_row("Reservas", str(stats['reservas']))
-                table.add_row("Cancelaciones", str(stats['cancelaciones']))
+                table.add_row("Compras", f"{stats['compras']} ({compras_por_segundo_actual:.1f}/s)")
+                table.add_row("Reservas", f"{stats['reservas']} ({reservas_por_segundo_actual:.1f}/s)")
+                table.add_row("Anulaciones", f"{stats['cancelaciones']} ({anulaciones_por_segundo_actual:.1f}/s)")
                 table.add_row("Errores", str(stats['errores']))
                 table.add_row("TPS", f"{tps:.2f}")
                 table.add_row("Tiempo Respuesta Promedio", f"{tiempo_promedio:.2f}ms")
                 table.add_row("Uso CPU", f"{cpu_percent}%")
                 table.add_row("Uso Memoria", f"{memory:.2f}MB")
                 
-                console.clear()
-                console.print(table)
+                # Mostrar últimos 10 errores solo si stop_on_error es True
+                if SIM_CONFIG['stop_on_error'] and stats['ultimos_errores']:
+                    error_table = Table(title="Últimos 10 Errores", show_header=True, header_style="bold red")
+                    error_table.add_column("Error", style="red", no_wrap=False)
+                    error_table.add_column("Cantidad", style="yellow", justify="right")
+                    
+                    for error, count in stats['ultimos_errores']:
+                        error_table.add_row(error, str(count))
+                    
+                    console.clear()
+                    console.print(table)
+                    console.print("\n")
+                    console.print(error_table)
+                else:
+                    console.clear()
+                    console.print(table)
                 
             except queue.Empty:
                 continue
@@ -376,13 +494,22 @@ def simular_usuarios(num_usuarios, prob_compra, prob_reserva, prob_cancelacion, 
         # Crear clientes para la simulación
         console.print("[bold blue]Creando clientes para la simulación...")
         clientes = []
-        for i in range(num_usuarios):
+        for i in tqdm(range(num_usuarios), desc="Creando clientes"):
             datos_bancarios = f"SIM_{random.randint(1000, 9999)}"
             try:
                 cursor.execute("INSERT INTO Cliente (datos_bancarios) VALUES (%s)", (datos_bancarios,))
                 clientes.append(datos_bancarios)
-            except Exception:
-                continue  # Si el cliente ya existe, continuamos
+            except mysql.connector.Error as err:
+                if err.errno == 1062:  # Duplicate entry error
+                    continue
+                error_msg = f"Error al crear cliente: {err}"
+                stats['errores_detalle'][error_msg] = stats['errores_detalle'].get(error_msg, 0) + 1
+                stats['ultimos_errores'].append((error_msg, stats['errores_detalle'][error_msg]))
+                if len(stats['ultimos_errores']) > 10:
+                    stats['ultimos_errores'].pop(0)
+                stats['errores'] += 1
+                stats_queue.put(stats)
+                continue
         conn.commit()
         
         if not clientes:
@@ -421,15 +548,15 @@ def simular_usuarios(num_usuarios, prob_compra, prob_reserva, prob_cancelacion, 
         
         # Simular usuarios
         tiempo_fin = time.time() + duracion
+        ultima_compra = time.time()
+        ultima_reserva = time.time()
+        ultima_anulacion = time.time()
+        
         while time.time() < tiempo_fin and stats['transacciones_totales'] < num_usuarios:
-            # Determinar tipo de acción
-            rand = random.random()
+            tiempo_actual = time.time()
             
-            if rand < prob_compra:
-                # Intentar compra
-                if not localidades_disponibles:
-                    continue
-                    
+            # Intentar compra si ha pasado el tiempo suficiente
+            if tiempo_actual - ultima_compra >= 1.0/compras_por_segundo and localidades_disponibles:
                 localidad = random.choice(localidades_disponibles)
                 fecha, recinto_id, espectaculo_id, ubicacion = localidad
                 datos_bancarios = random.choice(clientes)
@@ -437,11 +564,13 @@ def simular_usuarios(num_usuarios, prob_compra, prob_reserva, prob_cancelacion, 
                 
                 try:
                     inicio = time.time()
-                    cursor.execute("""
+                    query = """
                         INSERT INTO Transaccion 
                         (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
                         VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (datos_bancarios, 'compra', ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario))
+                    """
+                    params = (datos_bancarios, 'compra', ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
+                    cursor.execute(query, params)
                     
                     conn.commit()
                     
@@ -449,17 +578,24 @@ def simular_usuarios(num_usuarios, prob_compra, prob_reserva, prob_cancelacion, 
                     stats['transacciones_totales'] += 1
                     stats['compras'] += 1
                     stats['tiempos_respuesta'].append(tiempo_respuesta)
+                    ultima_compra = tiempo_actual
                     stats_queue.put(stats)
                     
-                except Exception as e:
+                except mysql.connector.Error as err:
+                    error_msg = f"Error en compra: {err}\nQuery: {query}\nParams: {params}"
+                    if SIM_CONFIG['stop_on_error']:
+                        console.print(f"\n[bold red]{error_msg}")
+                    stats['errores_detalle'][error_msg] = stats['errores_detalle'].get(error_msg, 0) + 1
+                    stats['ultimos_errores'].append((error_msg, stats['errores_detalle'][error_msg]))
+                    if len(stats['ultimos_errores']) > 10:
+                        stats['ultimos_errores'].pop(0)
                     stats['errores'] += 1
                     stats_queue.put(stats)
-                
-            elif rand < (prob_compra + prob_reserva):
-                # Intentar reserva
-                if not localidades_disponibles:
-                    continue
-                    
+                    if SIM_CONFIG['stop_on_error']:
+                        return  # Detener la simulación si está configurado para detenerse en errores
+            
+            # Intentar reserva si ha pasado el tiempo suficiente
+            if tiempo_actual - ultima_reserva >= 1.0/reservas_por_segundo and localidades_disponibles:
                 localidad = random.choice(localidades_disponibles)
                 fecha, recinto_id, espectaculo_id, ubicacion = localidad
                 datos_bancarios = random.choice(clientes)
@@ -467,11 +603,13 @@ def simular_usuarios(num_usuarios, prob_compra, prob_reserva, prob_cancelacion, 
                 
                 try:
                     inicio = time.time()
-                    cursor.execute("""
+                    query = """
                         INSERT INTO Transaccion 
                         (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
                         VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (datos_bancarios, 'reserva', ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario))
+                    """
+                    params = (datos_bancarios, 'reserva', ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
+                    cursor.execute(query, params)
                     
                     conn.commit()
                     
@@ -479,37 +617,67 @@ def simular_usuarios(num_usuarios, prob_compra, prob_reserva, prob_cancelacion, 
                     stats['transacciones_totales'] += 1
                     stats['reservas'] += 1
                     stats['tiempos_respuesta'].append(tiempo_respuesta)
+                    ultima_reserva = tiempo_actual
                     stats_queue.put(stats)
                     
-                except Exception as e:
+                except mysql.connector.Error as err:
+                    error_msg = f"Error en reserva: {err}\nQuery: {query}\nParams: {params}"
+                    if SIM_CONFIG['stop_on_error']:
+                        console.print(f"\n[bold red]{error_msg}")
+                    stats['errores_detalle'][error_msg] = stats['errores_detalle'].get(error_msg, 0) + 1
+                    stats['ultimos_errores'].append((error_msg, stats['errores_detalle'][error_msg]))
+                    if len(stats['ultimos_errores']) > 10:
+                        stats['ultimos_errores'].pop(0)
                     stats['errores'] += 1
                     stats_queue.put(stats)
-                
-            elif rand < (prob_compra + prob_reserva + prob_cancelacion):
-                # Intentar cancelación
-                if not reservas_existentes:
-                    continue
-                    
+                    if SIM_CONFIG['stop_on_error']:
+                        return  # Detener la simulación si está configurado para detenerse en errores
+            
+            # Intentar anulación si ha pasado el tiempo suficiente
+            if tiempo_actual - ultima_anulacion >= 1.0/anulaciones_por_segundo and reservas_existentes:
+                # Verificar que la reserva aún existe antes de intentar cancelarla
                 reserva = random.choice(reservas_existentes)
                 id_transaccion, fecha, recinto_id, espectaculo_id, ubicacion = reserva
                 
+                # Verificar que la reserva aún existe
+                cursor.execute("""
+                    SELECT id_transaccion 
+                    FROM Transaccion 
+                    WHERE id_transaccion = %s AND estado = 'reserva'
+                """, (id_transaccion,))
+                
+                if not cursor.fetchone():
+                    continue  # Saltar esta iteración si la reserva ya no existe
+                
                 try:
                     inicio = time.time()
-                    cursor.execute("CALL cancelar_reserva(%s)", (id_transaccion,))
+                    query = "CALL cancelar_reserva(%s)"
+                    params = (id_transaccion,)
+                    cursor.execute(query, params)
                     conn.commit()
                     
                     tiempo_respuesta = (time.time() - inicio) * 1000
                     stats['transacciones_totales'] += 1
                     stats['cancelaciones'] += 1
                     stats['tiempos_respuesta'].append(tiempo_respuesta)
+                    ultima_anulacion = tiempo_actual
                     stats_queue.put(stats)
                     
-                except Exception as e:
+                except mysql.connector.Error as err:
+                    error_msg = f"Error en anulación: {err}\nQuery: {query}\nParams: {params}"
+                    if SIM_CONFIG['stop_on_error']:
+                        console.print(f"\n[bold red]{error_msg}")
+                    stats['errores_detalle'][error_msg] = stats['errores_detalle'].get(error_msg, 0) + 1
+                    stats['ultimos_errores'].append((error_msg, stats['errores_detalle'][error_msg]))
+                    if len(stats['ultimos_errores']) > 10:
+                        stats['ultimos_errores'].pop(0)
                     stats['errores'] += 1
                     stats_queue.put(stats)
+                    if SIM_CONFIG['stop_on_error']:
+                        return  # Detener la simulación si está configurado para detenerse en errores
             
             # Pequeña pausa para no sobrecargar la base de datos
-            time.sleep(0.01)
+            time.sleep(0.001)
     
     except Exception as e:
         console.print(f"[bold red]Error en la simulación: {e}")
@@ -522,27 +690,6 @@ def simular_usuarios(num_usuarios, prob_compra, prob_reserva, prob_cancelacion, 
         # Detener hilo de estadísticas
         stats_queue.put("STOP")
         stats_thread.join()
-
-def simular():
-    """Interfaz para configurar y ejecutar la simulación"""
-    console = Console()
-    
-    try:
-        num_usuarios = int(Prompt.ask("\nNúmero de usuarios a simular", default="1000"))
-        prob_compra = float(Prompt.ask("Probabilidad de compra (0-1)", default="0.4"))
-        prob_reserva = float(Prompt.ask("Probabilidad de reserva (0-1)", default="0.3"))
-        prob_cancelacion = float(Prompt.ask("Probabilidad de cancelación (0-1)", default="0.2"))
-        duracion = int(Prompt.ask("Duración de la simulación en segundos", default="60"))
-        
-        if prob_compra + prob_reserva + prob_cancelacion > 1:
-            console.print("[bold red]La suma de probabilidades no puede ser mayor que 1")
-            return
-        
-        console.print("\n[bold yellow]Iniciando simulación...")
-        simular_usuarios(num_usuarios, prob_compra, prob_reserva, prob_cancelacion, duracion, console)
-        
-    except ValueError as e:
-        console.print(f"[bold red]Error en los parámetros: {e}")
 
 def mostrar_menu():
     """Muestra el menú principal"""

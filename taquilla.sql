@@ -91,20 +91,22 @@ ALTER TABLE `Espectaculo_TipoUsuario` ADD FOREIGN KEY (`espectaculo_id`) REFEREN
 ALTER TABLE `Transaccion` ADD FOREIGN KEY (`espectaculo_id`, `tipo_usuario`) REFERENCES `Espectaculo_TipoUsuario` (`espectaculo_id`, `tipo_usuario`);
 
 DELIMITER //
+DROP TRIGGER IF EXISTS check_ticket_limit//
 CREATE TRIGGER check_ticket_limit
 BEFORE INSERT ON Transaccion
 FOR EACH ROW
 BEGIN
     DECLARE ticket_count INT;
     
+    -- Contar todas las transacciones existentes para este cliente y evento
     SELECT COUNT(*) INTO ticket_count
     FROM Transaccion
     WHERE datos_bancarios = NEW.datos_bancarios
     AND fecha = NEW.fecha
     AND recinto_id = NEW.recinto_id
-    AND espectaculo_id = NEW.espectaculo_id
-    AND estado != 'anulada';
+    AND espectaculo_id = NEW.espectaculo_id;
     
+    -- Si ya tiene 10 o más tickets, rechazar la inserción
     IF ticket_count >= 10 THEN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'Maximum ticket limit (10) reached for this event';

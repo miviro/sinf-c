@@ -1,4 +1,3 @@
-
 DELIMITER //
 CREATE TRIGGER check_ticket_limit
 BEFORE INSERT ON Transaccion
@@ -11,8 +10,7 @@ BEGIN
     WHERE datos_bancarios = NEW.datos_bancarios
     AND fecha = NEW.fecha
     AND recinto_id = NEW.recinto_id
-    AND espectaculo_id = NEW.espectaculo_id
-    AND estado != 'anulada';
+    AND espectaculo_id = NEW.espectaculo_id;
     
     IF ticket_count >= 10 THEN
         SIGNAL SQLSTATE '45000'
