@@ -69,6 +69,12 @@ def poblar_base_datos():
     console = Console()
     
     try:
+        # Preguntar número total de localidades
+        total_localidades = int(Prompt.ask("\nNúmero total de localidades a generar", default="1000"))
+        if total_localidades <= 0:
+            console.print("[bold red]El número de localidades debe ser mayor que 0")
+            return
+        
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor()
         
@@ -165,63 +171,81 @@ def poblar_base_datos():
         localidades_batch = []
         costes_batch = []
         batch_size = 1000  # Reducido para mejor manejo de errores
+        localidades_generadas = 0
         
-        for fecha in tqdm(fechas, desc="Procesando Fechas"):
-            for rec_id, aforo in recintos:
-                for esp_id in range(1, 6):
-                    # Generar precios para este evento
-                    precios_por_tipo = {}
-                    for tipo in tipos_usuarios:
-                        random.seed(f"{fecha}{rec_id}{esp_id}{tipo}")
-                        rangos_precios = {
-                            'Jubilado': (15, 45),
-                            'Adulto': (30, 80),
-                            'Infantil': (10, 40),
-                            'Parado': (15, 45),
-                            'Bebe': (5, 25)
-                        }
-                        precios = set()
-                        while len(precios) < 4:
-                            min_precio, max_precio = rangos_precios[tipo]
-                            precio = random.randint(min_precio, max_precio)
-                            precios.add(precio)
-                        precios_por_tipo[tipo] = sorted(list(precios))
-                    
-                    # Crear localidades y costes para este evento
-                    for ubicacion in range(1, min(aforo + 1, 1001)):
-                        try:
-                            localidades_batch.append((ubicacion, fecha, rec_id, esp_id))
-                            
+        with tqdm(total=total_localidades, desc="Generando localidades") as pbar:
+            while localidades_generadas < total_localidades:
+                for fecha in fechas:
+                    for rec_id, aforo in recintos:
+                        for esp_id in range(1, 6):
+                            # Generar precios para este evento
+                            precios_por_tipo = {}
                             for tipo in tipos_usuarios:
-                                tipo_precio = random.randint(0, 3)
-                                precio = precios_por_tipo[tipo][tipo_precio]
-                                costes_batch.append((ubicacion, fecha, rec_id, esp_id, tipo, precio))
+                                random.seed(f"{fecha}{rec_id}{esp_id}{tipo}")
+                                rangos_precios = {
+                                    'Jubilado': (15, 45),
+                                    'Adulto': (30, 80),
+                                    'Infantil': (10, 40),
+                                    'Parado': (15, 45),
+                                    'Bebe': (5, 25)
+                                }
+                                precios = set()
+                                while len(precios) < 4:
+                                    min_precio, max_precio = rangos_precios[tipo]
+                                    precio = random.randint(min_precio, max_precio)
+                                    precios.add(precio)
+                                precios_por_tipo[tipo] = sorted(list(precios))
                             
-                            # Hacer commit cada batch_size registros
-                            if len(localidades_batch) >= batch_size:
+                            # Crear localidades y costes para este evento
+                            for ubicacion in range(1, min(aforo + 1, 1001)):
+                                if localidades_generadas >= total_localidades:
+                                    break
+                                    
                                 try:
-                                    cursor.executemany("""
-                                        INSERT INTO Localidad (ubicacion, fecha, recinto_id, espectaculo_id)
-                                        VALUES (%s, %s, %s, %s)
-                                    """, localidades_batch)
+                                    localidades_batch.append((ubicacion, fecha, rec_id, esp_id))
                                     
-                                    cursor.executemany("""
-                                        INSERT INTO Coste (ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario, precio)
-                                        VALUES (%s, %s, %s, %s, %s, %s)
-                                    """, costes_batch)
+                                    for tipo in tipos_usuarios:
+                                        tipo_precio = random.randint(0, 3)
+                                        precio = precios_por_tipo[tipo][tipo_precio]
+                                        costes_batch.append((ubicacion, fecha, rec_id, esp_id, tipo, precio))
                                     
-                                    conn.commit()
-                                    localidades_batch = []
-                                    costes_batch = []
-                                except mysql.connector.Error as err:
-                                    if err.errno == 1062:  # Duplicate entry error
-                                        localidades_batch = []
-                                        costes_batch = []
-                                        continue
-                                    raise
-                        except Exception as e:
-                            console.print(f"[bold red]Error al procesar ubicación {ubicacion}: {e}")
-                            continue
+                                    localidades_generadas += 1
+                                    pbar.update(1)
+                                    
+                                    # Hacer commit cada batch_size registros
+                                    if len(localidades_batch) >= batch_size:
+                                        try:
+                                            cursor.executemany("""
+                                                INSERT INTO Localidad (ubicacion, fecha, recinto_id, espectaculo_id)
+                                                VALUES (%s, %s, %s, %s)
+                                            """, localidades_batch)
+                                            
+                                            cursor.executemany("""
+                                                INSERT INTO Coste (ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario, precio)
+                                                VALUES (%s, %s, %s, %s, %s, %s)
+                                            """, costes_batch)
+                                            
+                                            conn.commit()
+                                            localidades_batch = []
+                                            costes_batch = []
+                                        except mysql.connector.Error as err:
+                                            if err.errno == 1062:  # Duplicate entry error
+                                                localidades_batch = []
+                                                costes_batch = []
+                                                continue
+                                            raise
+                                except Exception as e:
+                                    console.print(f"[bold red]Error al procesar ubicación {ubicacion}: {e}")
+                                    continue
+                            
+                            if localidades_generadas >= total_localidades:
+                                break
+                        if localidades_generadas >= total_localidades:
+                            break
+                    if localidades_generadas >= total_localidades:
+                        break
+                if localidades_generadas >= total_localidades:
+                    break
         
         # Insertar registros restantes
         if localidades_batch:
@@ -243,7 +267,7 @@ def poblar_base_datos():
                 else:
                     raise
         
-        console.print("[bold green]¡Base de datos poblada con éxito!")
+        console.print(f"[bold green]¡Base de datos poblada con éxito! Se generaron {localidades_generadas} localidades.")
         
     except Exception as e:
         console.print(f"[bold red]Error al poblar la base de datos: {e}")
@@ -741,7 +765,7 @@ def generar_benchmark_sql():
                 AND l.recinto_id = t.recinto_id 
                 AND l.espectaculo_id = t.espectaculo_id
             WHERE t.id_transaccion IS NULL
-            LIMIT 10000
+            ORDER BY RAND()
         """)
         localidades_disponibles = cursor.fetchall()
         
@@ -749,9 +773,56 @@ def generar_benchmark_sql():
             console.print("[bold red]No hay localidades disponibles para el benchmark.")
             return
         
+        # Crear un diccionario para rastrear localidades disponibles por evento
+        localidades_por_evento = {}
+        for fecha, recinto_id, espectaculo_id, ubicacion in localidades_disponibles:
+            key = (fecha, recinto_id, espectaculo_id)
+            if key not in localidades_por_evento:
+                localidades_por_evento[key] = []
+            localidades_por_evento[key].append(ubicacion)
+        
         # Obtener tipos de usuarios
         cursor.execute("SELECT tipo_usuario FROM TiposDeUsuarios")
         tipos_usuarios = [row[0] for row in cursor.fetchall()]
+        
+        # Primero crear las reservas necesarias para las anulaciones
+        console.print("[bold blue]Creando reservas iniciales para anulaciones...")
+        reservas_creadas = []
+        reservas_necesarias = min(num_anulaciones, len(localidades_disponibles))
+        
+        with tqdm(total=reservas_necesarias, desc="Creando reservas iniciales") as pbar:
+            for _ in range(reservas_necesarias):
+                eventos_disponibles = [k for k, v in localidades_por_evento.items() if v]
+                if not eventos_disponibles:
+                    break
+                
+                evento = random.choice(eventos_disponibles)
+                fecha, recinto_id, espectaculo_id = evento
+                ubicacion = random.choice(localidades_por_evento[evento])
+                localidades_por_evento[evento].remove(ubicacion)
+                
+                datos_bancarios = random.choice(clientes)
+                tipo_usuario = random.choice(tipos_usuarios)
+                
+                try:
+                    cursor.execute("""
+                        INSERT INTO Transaccion 
+                        (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (datos_bancarios, 'reserva', ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario))
+                    
+                    reservas_creadas.append((datos_bancarios, fecha, recinto_id, espectaculo_id, ubicacion))
+                    pbar.update(1)
+                except mysql.connector.Error as err:
+                    if err.errno == 1062:  # Duplicate entry error
+                        continue
+                    raise
+        
+        conn.commit()
+        
+        if not reservas_creadas:
+            console.print("[bold red]No se pudieron crear reservas para el benchmark.")
+            return
         
         # Generar archivo SQL
         console.print("[bold blue]Generando archivo SQL para benchmark...")
@@ -765,73 +836,99 @@ def generar_benchmark_sql():
             f.write("-- Variables para reutilización\n")
             f.write("SET @start_time = NOW();\n\n")
             
-            # Generar compras
-            f.write(f"-- Compras ({num_compras})\n")
-            for i in tqdm(range(num_compras), desc="Generando compras"):
-                if not localidades_disponibles:
-                    break
+            # Preparar listas de operaciones
+            operaciones = []
+            reservas_pendientes = []  # Lista para mantener las reservas que pueden ser anuladas
+            
+            # Generar secuencia de operaciones
+            with tqdm(total=num_compras + num_reservas + num_anulaciones, desc="Preparando secuencia de operaciones") as pbar:
+                while len(operaciones) < (num_compras + num_reservas + num_anulaciones):
+                    # Decidir qué operación realizar
+                    if len(reservas_pendientes) > 0 and random.random() < 0.3:  # 30% de probabilidad de anulación si hay reservas
+                        operaciones.append(('anulacion', len(operaciones)))
+                        pbar.update(1)
+                    else:
+                        if random.random() < 0.6:  # 60% de probabilidad de compra
+                            operaciones.append(('compra', len(operaciones)))
+                        else:  # 40% de probabilidad de reserva
+                            operaciones.append(('reserva', len(operaciones)))
+                            reservas_pendientes.append(len(operaciones) - 1)
+                        pbar.update(1)
+            
+            # Ejecutar operaciones en orden
+            compras_generadas = 0
+            reservas_generadas = 0
+            anulaciones_generadas = 0
+            
+            with tqdm(total=len(operaciones), desc="Generando operaciones") as pbar:
+                for i, (tipo, _) in enumerate(operaciones):
+                    if tipo == 'compra' and compras_generadas < num_compras:
+                        # Seleccionar un evento aleatorio que tenga localidades disponibles
+                        eventos_disponibles = [k for k, v in localidades_por_evento.items() if v]
+                        if not eventos_disponibles:
+                            continue
+                        
+                        evento = random.choice(eventos_disponibles)
+                        fecha, recinto_id, espectaculo_id = evento
+                        ubicacion = random.choice(localidades_por_evento[evento])
+                        localidades_por_evento[evento].remove(ubicacion)
+                        
+                        datos_bancarios = random.choice(clientes)
+                        tipo_usuario = random.choice(tipos_usuarios)
+                        
+                        f.write(f"""-- Compra {compras_generadas + 1}
+INSERT INTO Transaccion 
+        (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
+        VALUES ('{datos_bancarios}', 'compra', {ubicacion}, '{fecha}', '{recinto_id}', {espectaculo_id}, '{tipo_usuario}');\n""")
+                        compras_generadas += 1
+                        
+                    elif tipo == 'reserva' and reservas_generadas < num_reservas:
+                        eventos_disponibles = [k for k, v in localidades_por_evento.items() if v]
+                        if not eventos_disponibles:
+                            continue
+                        
+                        evento = random.choice(eventos_disponibles)
+                        fecha, recinto_id, espectaculo_id = evento
+                        ubicacion = random.choice(localidades_por_evento[evento])
+                        localidades_por_evento[evento].remove(ubicacion)
+                        
+                        datos_bancarios = random.choice(clientes)
+                        tipo_usuario = random.choice(tipos_usuarios)
+                        
+                        f.write(f"""-- Reserva {reservas_generadas + 1}
+INSERT INTO Transaccion 
+        (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
+        VALUES ('{datos_bancarios}', 'reserva', {ubicacion}, '{fecha}', '{recinto_id}', {espectaculo_id}, '{tipo_usuario}');\n""")
+                        reservas_generadas += 1
+                        
+                    elif tipo == 'anulacion' and anulaciones_generadas < num_anulaciones and reservas_creadas:
+                        # Obtener una reserva aleatoria de las creadas
+                        reserva = random.choice(reservas_creadas)
+                        datos_bancarios, fecha, recinto_id, espectaculo_id, ubicacion = reserva
+                        
+                        f.write(f"""-- Anulación {anulaciones_generadas + 1}
+SELECT id_transaccion INTO @transaccion_id 
+FROM Transaccion 
+WHERE datos_bancarios = '{datos_bancarios}' 
+AND fecha = '{fecha}' 
+AND recinto_id = '{recinto_id}' 
+AND espectaculo_id = {espectaculo_id} 
+AND ubicacion = {ubicacion} 
+AND estado = 'reserva'
+LIMIT 1;
+
+CALL cancelar_reserva(@transaccion_id, '{datos_bancarios}');\n""")
+                        anulaciones_generadas += 1
+                        reservas_creadas.remove(reserva)  # Remover la reserva usada
                     
-                localidad = random.choice(localidades_disponibles)
-                fecha, recinto_id, espectaculo_id, ubicacion = localidad
-                
-                # Remover la localidad para evitar duplicados
-                localidades_disponibles.remove(localidad)
-                
-                datos_bancarios = random.choice(clientes)
-                tipo_usuario = random.choice(tipos_usuarios)
-                
-                f.write(f"""INSERT INTO Transaccion 
-                        (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
-                        VALUES ('{datos_bancarios}', 'compra', {ubicacion}, '{fecha}', '{recinto_id}', {espectaculo_id}, '{tipo_usuario}');\n""")
+                    pbar.update(1)
             
-            # Generar reservas
-            f.write(f"\n-- Reservas ({num_reservas})\n")
-            reservas_ids = []  # Para recordar qué reservas se pueden anular
-            
-            for i in tqdm(range(num_reservas), desc="Generando reservas"):
-                if not localidades_disponibles:
-                    break
-                    
-                localidad = random.choice(localidades_disponibles)
-                fecha, recinto_id, espectaculo_id, ubicacion = localidad
-                
-                # Remover la localidad para evitar duplicados
-                localidades_disponibles.remove(localidad)
-                
-                datos_bancarios = random.choice(clientes)
-                tipo_usuario = random.choice(tipos_usuarios)
-                
-                # Almacenar información de la reserva para posibles anulaciones
-                reservas_ids.append(i + 1)  # ID tentativo de la reserva
-                
-                f.write(f"""INSERT INTO Transaccion 
-                        (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
-                        VALUES ('{datos_bancarios}', 'reserva', {ubicacion}, '{fecha}', '{recinto_id}', {espectaculo_id}, '{tipo_usuario}');\n""")
-            
-            # Seleccionar transacciones creadas para anulaciones
-            f.write(f"\n-- Seleccionar reservas para anulaciones\n")
-            f.write("SELECT @last_insert_id := LAST_INSERT_ID();\n")
-            
-            # Generar anulaciones 
-            f.write(f"\n-- Anulaciones ({num_anulaciones})\n")
-            for i in tqdm(range(min(num_anulaciones, len(reservas_ids))), desc="Generando anulaciones"):
-                reservation_id = reservas_ids[i]
-                f.write(f"CALL cancelar_reserva(@last_insert_id - {len(reservas_ids) - reservation_id});\n")
-            
-            # Generar consultas (simples y complejas)
+            # Generar consultas
             f.write(f"\n-- Consultas ({num_consultas})\n")
-            
-            # Diferentes tipos de consultas para benchmark
-            consultas = [
-                "SELECT COUNT(*) FROM Transaccion WHERE estado = 'compra';",
-                "SELECT COUNT(*) FROM Transaccion WHERE estado = 'reserva';",
-                "SELECT e.fecha, e.recinto_id, e.espectaculo_id, esp.nombre, COUNT(t.id_transaccion) FROM Evento e JOIN Espectaculo esp ON e.espectaculo_id = esp.id_espectaculo LEFT JOIN Transaccion t ON e.fecha = t.fecha AND e.recinto_id = t.recinto_id AND e.espectaculo_id = t.espectaculo_id GROUP BY e.fecha, e.recinto_id, e.espectaculo_id;",
-                "SELECT c.datos_bancarios, COUNT(*) as num_transacciones FROM Cliente c JOIN Transaccion t ON c.datos_bancarios = t.datos_bancarios GROUP BY c.datos_bancarios ORDER BY num_transacciones DESC LIMIT 10;",
-                "SELECT l.fecha, l.recinto_id, l.espectaculo_id, COUNT(*) as total, SUM(CASE WHEN t.id_transaccion IS NULL THEN 1 ELSE 0 END) as disponibles FROM Localidad l LEFT JOIN Transaccion t ON l.ubicacion = t.ubicacion AND l.fecha = t.fecha AND l.recinto_id = t.recinto_id AND l.espectaculo_id = t.espectaculo_id GROUP BY l.fecha, l.recinto_id, l.espectaculo_id;"
-            ]
-            
-            for i in tqdm(range(num_consultas), desc="Generando consultas"):
-                f.write(f"{random.choice(consultas)}\n")
+            with tqdm(total=num_consultas, desc="Generando consultas") as pbar:
+                for i in range(num_consultas):
+                    f.write(f"{random.choice(consultas)}\n")
+                    pbar.update(1)
             
             # Commit y calcular tiempo
             f.write("\nCOMMIT;\n")
@@ -865,6 +962,9 @@ def generar_benchmark_sql():
                 for query in queries:
                     try:
                         cursor.execute(query)
+                        # Fetch results for SELECT queries
+                        if query.strip().upper().startswith('SELECT'):
+                            cursor.fetchall()
                         pbar.update(1)
                     except mysql.connector.Error as err:
                         console.print(f"[bold red]Error en consulta: {err}")

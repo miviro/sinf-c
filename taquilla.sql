@@ -116,17 +116,19 @@ DELIMITER ;
 
 DELIMITER //
 CREATE PROCEDURE cancelar_reserva(
-    IN p_id_transaccion INT
+    IN p_id_transaccion INT,
+    IN p_datos_bancarios VARCHAR(255)
 )
 BEGIN
     DECLARE v_fecha VARCHAR(255);
     DECLARE v_recinto_id VARCHAR(255);
     DECLARE v_espectaculo_id INT;
     DECLARE v_estado VARCHAR(20);
+    DECLARE v_transaction_datos_bancarios VARCHAR(255);
     
     -- Get the transaction details
-    SELECT fecha, recinto_id, espectaculo_id, estado 
-    INTO v_fecha, v_recinto_id, v_espectaculo_id, v_estado
+    SELECT fecha, recinto_id, espectaculo_id, estado, datos_bancarios 
+    INTO v_fecha, v_recinto_id, v_espectaculo_id, v_estado, v_transaction_datos_bancarios
     FROM Transaccion 
     WHERE id_transaccion = p_id_transaccion;
     
@@ -137,6 +139,9 @@ BEGIN
     ELSEIF v_estado != 'reserva' THEN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'Only reservations can be canceled';
+    ELSEIF v_transaction_datos_bancarios != p_datos_bancarios THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Unauthorized: datos_bancarios do not match';
     END IF;
     
     -- Start transaction
