@@ -25,7 +25,8 @@ DB_CONFIG = {
 
 # Configuración de la simulación
 SIM_CONFIG = {
-    'stop_on_error': False  # Cambiar a False para continuar la simulación después de errores
+    'stop_on_error': False,  # Cambiar a False para continuar la simulación después de errores
+    'benchmark_file': 'benchmark.sql'  # Archivo para el benchmark SQL
 }
 
 # Variables globales para estadísticas
@@ -691,6 +692,218 @@ def simular_usuarios(num_usuarios, compras_por_segundo, reservas_por_segundo, an
         stats_queue.put("STOP")
         stats_thread.join()
 
+def generar_benchmark_sql():
+    """Genera un archivo SQL con operaciones para benchmark y lo ejecuta"""
+    console = Console()
+    
+    try:
+        num_compras = int(Prompt.ask("\nNúmero de compras a generar", default="1000"))
+        num_reservas = int(Prompt.ask("Número de reservas a generar", default="500"))
+        num_anulaciones = int(Prompt.ask("Número de anulaciones a generar", default="200"))
+        num_consultas = int(Prompt.ask("Número de consultas a generar", default="300"))
+        
+        if num_compras < 0 or num_reservas < 0 or num_anulaciones < 0 or num_consultas < 0:
+            console.print("[bold red]Los números no pueden ser negativos")
+            return
+        
+        # Conectar a la base de datos para obtener datos existentes
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        # Obtener clientes existentes o crear nuevos si no hay suficientes
+        cursor.execute("SELECT datos_bancarios FROM Cliente LIMIT 1000")
+        clientes = [row[0] for row in cursor.fetchall()]
+        
+        if len(clientes) < 100:
+            console.print("[bold yellow]Creando clientes para el benchmark...")
+            for i in tqdm(range(1000), desc="Creando clientes"):
+                datos_bancarios = f"BENCH_{random.randint(1000, 9999)}"
+                try:
+                    cursor.execute("INSERT INTO Cliente (datos_bancarios) VALUES (%s)", (datos_bancarios,))
+                    clientes.append(datos_bancarios)
+                except mysql.connector.Error as err:
+                    if err.errno == 1062:  # Duplicate entry error
+                        continue
+            conn.commit()
+            
+            cursor.execute("SELECT datos_bancarios FROM Cliente LIMIT 1000")
+            clientes = [row[0] for row in cursor.fetchall()]
+        
+        # Obtener localidades disponibles
+        cursor.execute("""
+            SELECT e.fecha, e.recinto_id, e.espectaculo_id, l.ubicacion
+            FROM Evento e
+            JOIN Localidad l ON e.fecha = l.fecha 
+                AND e.recinto_id = l.recinto_id 
+                AND e.espectaculo_id = l.espectaculo_id
+            LEFT JOIN Transaccion t ON l.ubicacion = t.ubicacion 
+                AND l.fecha = t.fecha 
+                AND l.recinto_id = t.recinto_id 
+                AND l.espectaculo_id = t.espectaculo_id
+            WHERE t.id_transaccion IS NULL
+            LIMIT 10000
+        """)
+        localidades_disponibles = cursor.fetchall()
+        
+        if not localidades_disponibles:
+            console.print("[bold red]No hay localidades disponibles para el benchmark.")
+            return
+        
+        # Obtener tipos de usuarios
+        cursor.execute("SELECT tipo_usuario FROM TiposDeUsuarios")
+        tipos_usuarios = [row[0] for row in cursor.fetchall()]
+        
+        # Generar archivo SQL
+        console.print("[bold blue]Generando archivo SQL para benchmark...")
+        
+        with open(SIM_CONFIG['benchmark_file'], 'w') as f:
+            # Iniciar transacción y deshabilitar autocommit
+            f.write("SET autocommit=0;\n")
+            f.write("START TRANSACTION;\n\n")
+            
+            # Generar declaraciones de variables para reutilización
+            f.write("-- Variables para reutilización\n")
+            f.write("SET @start_time = NOW();\n\n")
+            
+            # Generar compras
+            f.write(f"-- Compras ({num_compras})\n")
+            for i in tqdm(range(num_compras), desc="Generando compras"):
+                if not localidades_disponibles:
+                    break
+                    
+                localidad = random.choice(localidades_disponibles)
+                fecha, recinto_id, espectaculo_id, ubicacion = localidad
+                
+                # Remover la localidad para evitar duplicados
+                localidades_disponibles.remove(localidad)
+                
+                datos_bancarios = random.choice(clientes)
+                tipo_usuario = random.choice(tipos_usuarios)
+                
+                f.write(f"""INSERT INTO Transaccion 
+                        (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
+                        VALUES ('{datos_bancarios}', 'compra', {ubicacion}, '{fecha}', '{recinto_id}', {espectaculo_id}, '{tipo_usuario}');\n""")
+            
+            # Generar reservas
+            f.write(f"\n-- Reservas ({num_reservas})\n")
+            reservas_ids = []  # Para recordar qué reservas se pueden anular
+            
+            for i in tqdm(range(num_reservas), desc="Generando reservas"):
+                if not localidades_disponibles:
+                    break
+                    
+                localidad = random.choice(localidades_disponibles)
+                fecha, recinto_id, espectaculo_id, ubicacion = localidad
+                
+                # Remover la localidad para evitar duplicados
+                localidades_disponibles.remove(localidad)
+                
+                datos_bancarios = random.choice(clientes)
+                tipo_usuario = random.choice(tipos_usuarios)
+                
+                # Almacenar información de la reserva para posibles anulaciones
+                reservas_ids.append(i + 1)  # ID tentativo de la reserva
+                
+                f.write(f"""INSERT INTO Transaccion 
+                        (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
+                        VALUES ('{datos_bancarios}', 'reserva', {ubicacion}, '{fecha}', '{recinto_id}', {espectaculo_id}, '{tipo_usuario}');\n""")
+            
+            # Seleccionar transacciones creadas para anulaciones
+            f.write(f"\n-- Seleccionar reservas para anulaciones\n")
+            f.write("SELECT @last_insert_id := LAST_INSERT_ID();\n")
+            
+            # Generar anulaciones 
+            f.write(f"\n-- Anulaciones ({num_anulaciones})\n")
+            for i in tqdm(range(min(num_anulaciones, len(reservas_ids))), desc="Generando anulaciones"):
+                reservation_id = reservas_ids[i]
+                f.write(f"CALL cancelar_reserva(@last_insert_id - {len(reservas_ids) - reservation_id});\n")
+            
+            # Generar consultas (simples y complejas)
+            f.write(f"\n-- Consultas ({num_consultas})\n")
+            
+            # Diferentes tipos de consultas para benchmark
+            consultas = [
+                "SELECT COUNT(*) FROM Transaccion WHERE estado = 'compra';",
+                "SELECT COUNT(*) FROM Transaccion WHERE estado = 'reserva';",
+                "SELECT e.fecha, e.recinto_id, e.espectaculo_id, esp.nombre, COUNT(t.id_transaccion) FROM Evento e JOIN Espectaculo esp ON e.espectaculo_id = esp.id_espectaculo LEFT JOIN Transaccion t ON e.fecha = t.fecha AND e.recinto_id = t.recinto_id AND e.espectaculo_id = t.espectaculo_id GROUP BY e.fecha, e.recinto_id, e.espectaculo_id;",
+                "SELECT c.datos_bancarios, COUNT(*) as num_transacciones FROM Cliente c JOIN Transaccion t ON c.datos_bancarios = t.datos_bancarios GROUP BY c.datos_bancarios ORDER BY num_transacciones DESC LIMIT 10;",
+                "SELECT l.fecha, l.recinto_id, l.espectaculo_id, COUNT(*) as total, SUM(CASE WHEN t.id_transaccion IS NULL THEN 1 ELSE 0 END) as disponibles FROM Localidad l LEFT JOIN Transaccion t ON l.ubicacion = t.ubicacion AND l.fecha = t.fecha AND l.recinto_id = t.recinto_id AND l.espectaculo_id = t.espectaculo_id GROUP BY l.fecha, l.recinto_id, l.espectaculo_id;"
+            ]
+            
+            for i in tqdm(range(num_consultas), desc="Generando consultas"):
+                f.write(f"{random.choice(consultas)}\n")
+            
+            # Commit y calcular tiempo
+            f.write("\nCOMMIT;\n")
+            f.write("SELECT TIMEDIFF(NOW(), @start_time) as tiempo_ejecucion;\n")
+        
+        # Cerrar conexión
+        cursor.close()
+        conn.close()
+        
+        console.print(f"[bold green]¡Archivo SQL generado en {SIM_CONFIG['benchmark_file']}!")
+        
+        # Ejecutar benchmark
+        if Prompt.ask("\n¿Desea ejecutar el benchmark ahora?", choices=["s", "n"], default="s") == "s":
+            console.print("[bold blue]Ejecutando benchmark SQL...")
+            
+            # Leer el archivo SQL y dividirlo en consultas
+            with open(SIM_CONFIG['benchmark_file'], 'r') as f:
+                sql_content = f.read()
+            
+            # Dividir en consultas individuales
+            queries = [q.strip() for q in sql_content.split(';') if q.strip()]
+            
+            # Conectar a la base de datos para ejecutar las consultas
+            conn = mysql.connector.connect(**DB_CONFIG)
+            cursor = conn.cursor()
+            
+            start_time = time.time()
+            
+            # Ejecutar las consultas con barra de progreso
+            with tqdm(total=len(queries), desc="Ejecutando consultas") as pbar:
+                for query in queries:
+                    try:
+                        cursor.execute(query)
+                        pbar.update(1)
+                    except mysql.connector.Error as err:
+                        console.print(f"[bold red]Error en consulta: {err}")
+                        console.print(f"[bold red]Query: {query}")
+                        break
+            
+            tiempo_total = time.time() - start_time
+            
+            # Obtener el tiempo de ejecución reportado por MySQL
+            cursor.execute("SELECT TIMEDIFF(NOW(), @start_time) as tiempo_ejecucion")
+            tiempo_sql = cursor.fetchone()[0]
+            
+            # Cerrar conexión
+            cursor.close()
+            conn.close()
+            
+            console.print(f"[bold green]¡Benchmark completado en {tiempo_total:.2f} segundos!")
+            console.print(f"[bold green]Tiempo reportado por MySQL: {tiempo_sql}")
+            
+            # Mostrar estadísticas de rendimiento
+            tps = (num_compras + num_reservas + num_anulaciones) / tiempo_total
+            
+            table = Table(title="Resultados del Benchmark")
+            table.add_column("Métrica", style="cyan")
+            table.add_column("Valor", style="green")
+            
+            table.add_row("Tiempo total", f"{tiempo_total:.2f}s")
+            table.add_row("Transacciones totales", str(num_compras + num_reservas + num_anulaciones))
+            table.add_row("Compras", str(num_compras))
+            table.add_row("Reservas", str(num_reservas))
+            table.add_row("Anulaciones", str(num_anulaciones))
+            table.add_row("Consultas", str(num_consultas))
+            table.add_row("TPS", f"{tps:.2f}")
+            
+            console.print(table)
+        
+    except Exception as e:
+        console.print(f"[bold red]Error en el benchmark: {e}")
+
 def mostrar_menu():
     """Muestra el menú principal"""
     console = Console()
@@ -703,12 +916,13 @@ def mostrar_menu():
             "2. Poblar Base de Datos\n"
             "3. Ver Detalles de Evento\n"
             "4. Simular Usuarios\n"
-            "5. Salir",
+            "5. Generar Benchmark SQL\n"
+            "6. Salir",
             title="[bold blue]Opciones Disponibles",
             border_style="blue"
         ))
         
-        opcion = Prompt.ask("\nSeleccione una opción", choices=["1", "2", "3", "4", "5"])
+        opcion = Prompt.ask("\nSeleccione una opción", choices=["1", "2", "3", "4", "5", "6"])
         
         if opcion == "1":
             reset_database()
@@ -719,6 +933,8 @@ def mostrar_menu():
         elif opcion == "4":
             simular()
         elif opcion == "5":
+            generar_benchmark_sql()
+        elif opcion == "6":
             console.print("[bold green]¡Hasta luego!")
             break
         
