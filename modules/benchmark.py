@@ -55,8 +55,13 @@ def generar_benchmark_sql():
             tipos_str = loc_data.get('tipos_usuario_permitidos')
             localidades_por_evento[key].append((loc_data['ubicacion'], tipos_str.split(',') if tipos_str else ['Adulto']))
 
-        num_clientes_bm = 1000
+        # Calculate required number of clients based on purchases and reservations (10 transactions per client max)
+        total_transacciones = num_compras + num_reservas
+        num_clientes_bm = (total_transacciones + 9) // 10  # Ceiling division
         clientes_bm = [f"BENCH_{i:04d}" for i in range(1, num_clientes_bm + 1)]
+        
+        # Dictionary to track transactions per client (both purchases and reservations)
+        transacciones_por_cliente = {cliente: 0 for cliente in clientes_bm}
         
         console.print("[bold blue]Generando archivo SQL para benchmark...")
         
@@ -80,6 +85,15 @@ def generar_benchmark_sql():
             # COMPRAS
             for _ in range(num_compras):
                 if not localidades_por_evento or operaciones_realizadas_count >= max_total_operaciones: break
+                
+                # Find a client that hasn't reached the limit
+                clientes_disponibles = [cl for cl in clientes_bm if transacciones_por_cliente[cl] < 10]
+                if not clientes_disponibles:
+                    console.print("[yellow]Todos los clientes han alcanzado el límite de 10 transacciones[/yellow]")
+                    break
+                    
+                cliente_seleccionado = random.choice(clientes_disponibles)
+                
                 evento_key = random.choice(list(localidades_por_evento.keys()))
                 if not localidades_por_evento[evento_key]:
                     del localidades_por_evento[evento_key]
@@ -88,7 +102,8 @@ def generar_benchmark_sql():
                 if not localidades_por_evento[evento_key]: del localidades_por_evento[evento_key]
                 fecha_sql, recinto_sql, espectaculo_sql = evento_key
                 
-                f.write(f"INSERT INTO Transaccion (id_transaccion, datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario) VALUES ({next_sim_trans_id}, '{random.choice(clientes_bm)}', 'compra', {ubicacion}, '{fecha_sql.strftime('%Y-%m-%d %H:%M:%S')}', '{recinto_sql}', {espectaculo_sql}, '{random.choice(tipos_usr)}');\n")
+                f.write(f"INSERT INTO Transaccion (id_transaccion, datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario) VALUES ({next_sim_trans_id}, '{cliente_seleccionado}', 'compra', {ubicacion}, '{fecha_sql.strftime('%Y-%m-%d %H:%M:%S')}', '{recinto_sql}', {espectaculo_sql}, '{random.choice(tipos_usr)}');\n")
+                transacciones_por_cliente[cliente_seleccionado] += 1
                 next_sim_trans_id+=1
                 operaciones_realizadas_count += 1
                 pbar_ops.update(1)
@@ -96,6 +111,15 @@ def generar_benchmark_sql():
             # RESERVAS
             for _ in range(num_reservas):
                 if not localidades_por_evento or operaciones_realizadas_count >= max_total_operaciones: break
+                
+                # Find a client that hasn't reached the limit
+                clientes_disponibles = [cl for cl in clientes_bm if transacciones_por_cliente[cl] < 10]
+                if not clientes_disponibles:
+                    console.print("[yellow]Todos los clientes han alcanzado el límite de 10 transacciones[/yellow]")
+                    break
+                    
+                cliente_seleccionado = random.choice(clientes_disponibles)
+                
                 evento_key = random.choice(list(localidades_por_evento.keys()))
                 if not localidades_por_evento[evento_key]: 
                     del localidades_por_evento[evento_key]
@@ -103,10 +127,10 @@ def generar_benchmark_sql():
                 ubicacion, tipos_usr = localidades_por_evento[evento_key].pop(0)
                 if not localidades_por_evento[evento_key]: del localidades_por_evento[evento_key]
                 fecha_sql, recinto_sql, espectaculo_sql = evento_key
-                cliente_reserva = random.choice(clientes_bm)
 
-                f.write(f"INSERT INTO Transaccion (id_transaccion, datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario) VALUES ({next_sim_trans_id}, '{cliente_reserva}', 'reserva', {ubicacion}, '{fecha_sql.strftime('%Y-%m-%d %H:%M:%S')}', '{recinto_sql}', {espectaculo_sql}, '{random.choice(tipos_usr)}');\n")
-                reservas_hechas_para_anular.append({'id': next_sim_trans_id, 'cliente': cliente_reserva})
+                f.write(f"INSERT INTO Transaccion (id_transaccion, datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario) VALUES ({next_sim_trans_id}, '{cliente_seleccionado}', 'reserva', {ubicacion}, '{fecha_sql.strftime('%Y-%m-%d %H:%M:%S')}', '{recinto_sql}', {espectaculo_sql}, '{random.choice(tipos_usr)}');\n")
+                transacciones_por_cliente[cliente_seleccionado] += 1
+                reservas_hechas_para_anular.append({'id': next_sim_trans_id, 'cliente': cliente_seleccionado})
                 next_sim_trans_id+=1
                 operaciones_realizadas_count += 1
                 pbar_ops.update(1)

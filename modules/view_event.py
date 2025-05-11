@@ -38,11 +38,12 @@ def ver_evento():
                 SUM(CASE WHEN t.estado = 'compra' THEN 1 ELSE 0 END) as compradas,
                 SUM(CASE WHEN t.estado = 'reserva' THEN 1 ELSE 0 END) as reservadas,
                 e.cancelaciones,
+                e.estado,
                 GROUP_CONCAT(DISTINCT etu.tipo_usuario) as tipos_usuario_permitidos
             FROM Evento e
-            JOIN Espectaculo esp ON e.espectaculo_id = esp.id_espectaculo
-            JOIN Recinto r ON e.recinto_id = r.id_nombre
-            JOIN Localidad l ON e.fecha = l.fecha 
+            LEFT JOIN Espectaculo esp ON e.espectaculo_id = esp.id_espectaculo
+            LEFT JOIN Recinto r ON e.recinto_id = r.id_nombre
+            LEFT JOIN Localidad l ON e.fecha = l.fecha 
                 AND e.recinto_id = l.recinto_id 
                 AND e.espectaculo_id = l.espectaculo_id
             LEFT JOIN Transaccion t ON l.ubicacion = t.ubicacion 
@@ -50,7 +51,7 @@ def ver_evento():
                 AND l.recinto_id = t.recinto_id 
                 AND l.espectaculo_id = t.espectaculo_id
             LEFT JOIN Espectaculo_TipoUsuario etu ON e.espectaculo_id = etu.espectaculo_id
-            GROUP BY e.fecha, e.recinto_id, e.espectaculo_id, esp.nombre, r.id_nombre, e.cancelaciones
+            GROUP BY e.fecha, e.recinto_id, e.espectaculo_id, esp.nombre, r.id_nombre, e.cancelaciones, e.estado
             ORDER BY e.fecha, esp.nombre
         """)
         eventos = cursor.fetchall()
@@ -65,6 +66,8 @@ def ver_evento():
         table.add_column("Fecha", style="green")
         table.add_column("Espectáculo", style="yellow")
         table.add_column("Recinto", style="magenta")
+        table.add_column("Estado", style="blue")
+        table.add_column("Total Localidades", style="cyan")
         table.add_column("Ocupación", style="blue")
         table.add_column("Reservas", style="yellow")
         table.add_column("Cancelaciones", style="red")
@@ -82,6 +85,8 @@ def ver_evento():
                 fecha_str,
                 evento['nombre_espectaculo'],
                 evento['nombre_recinto'],
+                evento['estado'],
+                str(evento['total_localidades']),
                 f"{ocupacion:.1f}%",
                 f"{reservas:.1f}%",
                 str(evento['cancelaciones']),
