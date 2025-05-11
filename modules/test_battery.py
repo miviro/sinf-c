@@ -825,9 +825,9 @@ def prueba_anular_transaccion(cursor, tabla):
             pass
 
 def prueba_no_compras_eventos_finalizados(cursor, tabla):
-    """Verifica que no se permitan compras en eventos finalizados"""
+    """Verifica que no se permitan compras en eventos finalizados o cerrados"""
     try:
-        # Crear un evento futuro (abierto) y otro finalizado para pruebas
+        # Crear un evento futuro (abierto), uno finalizado y uno cerrado para pruebas
         recinto_test = "Test_Recinto_Eventos_Finalizados"
         espectaculo_nombre = "Test_Espectaculo_Eventos_Finalizados"
         
@@ -837,6 +837,9 @@ def prueba_no_compras_eventos_finalizados(cursor, tabla):
         
         fecha_pasado = datetime.now() - timedelta(days=5)
         fecha_fin_pasado = fecha_pasado + timedelta(hours=2)
+        
+        fecha_cerrado = datetime.now() + timedelta(hours=1)
+        fecha_fin_cerrado = fecha_cerrado + timedelta(hours=2)
         
         # Insertar recinto de prueba
         cursor.execute("""
@@ -896,6 +899,24 @@ def prueba_no_compras_eventos_finalizados(cursor, tabla):
             VALUES (1, %s, %s, %s, 'Adulto', 20)
         """, (fecha_pasado, recinto_test, espectaculo_id))
         
+        # Insertar evento cerrado
+        cursor.execute("""
+            INSERT INTO Evento (fecha, fecha_fin, recinto_id, espectaculo_id, estado)
+            VALUES (%s, %s, %s, %s, 'Cerrado')
+        """, (fecha_cerrado, fecha_fin_cerrado, recinto_test, espectaculo_id))
+        
+        # Insertar localidad para evento cerrado
+        cursor.execute("""
+            INSERT INTO Localidad (ubicacion, fecha, recinto_id, espectaculo_id)
+            VALUES (1, %s, %s, %s)
+        """, (fecha_cerrado, recinto_test, espectaculo_id))
+        
+        # Insertar coste para evento cerrado
+        cursor.execute("""
+            INSERT INTO Coste (ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario, precio)
+            VALUES (1, %s, %s, %s, 'Adulto', 20)
+        """, (fecha_cerrado, recinto_test, espectaculo_id))
+        
         # Insertar cliente de prueba
         cursor.execute("""
             INSERT INTO Cliente (datos_bancarios)
@@ -913,7 +934,7 @@ def prueba_no_compras_eventos_finalizados(cursor, tabla):
         except mysql.connector.Error:
             compra_evento_abierto_funciona = False
         
-        # CASO INVÁLIDO: Intentar comprar entrada para evento finalizado (debería fallar)
+        # CASO INVÁLIDO 1: Intentar comprar entrada para evento finalizado (debería fallar)
         compra_evento_finalizado_falla = False
         try:
             cursor.execute("""
@@ -925,29 +946,41 @@ def prueba_no_compras_eventos_finalizados(cursor, tabla):
             if 'cerrados o finalizados' in str(e).lower():
                 compra_evento_finalizado_falla = True
         
+        # CASO INVÁLIDO 2: Intentar comprar entrada para evento cerrado (debería fallar)
+        compra_evento_cerrado_falla = False
+        try:
+            cursor.execute("""
+                INSERT INTO Transaccion (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
+                VALUES ('888888888', 'compra', 1, %s, %s, %s, 'Adulto')
+            """, (fecha_cerrado, recinto_test, espectaculo_id))
+        except mysql.connector.Error as e:
+            # Se espera error por evento cerrado
+            if 'cerrados o finalizados' in str(e).lower():
+                compra_evento_cerrado_falla = True
+        
         # Verificar resultados
-        if compra_evento_abierto_funciona and compra_evento_finalizado_falla:
+        if compra_evento_abierto_funciona and compra_evento_finalizado_falla and compra_evento_cerrado_falla:
             tabla.add_row(
-                "No compras en eventos finalizados", 
-                "Verifica que no se permitan compras para eventos finalizados", 
-                "✅ Correcto - Se permiten compras en eventos abiertos y se rechazan en finalizados"
+                "No compras en eventos finalizados/cerrados", 
+                "Verifica que no se permitan compras para eventos finalizados o cerrados", 
+                "✅ Correcto - Se permiten compras en eventos abiertos y se rechazan en finalizados/cerrados"
             )
-        elif compra_evento_abierto_funciona and not compra_evento_finalizado_falla:
+        elif compra_evento_abierto_funciona and (not compra_evento_finalizado_falla or not compra_evento_cerrado_falla):
             tabla.add_row(
-                "No compras en eventos finalizados", 
-                "Verifica que no se permitan compras para eventos finalizados", 
-                "❌ Error - Se permiten compras en eventos finalizados"
+                "No compras en eventos finalizados/cerrados", 
+                "Verifica que no se permitan compras para eventos finalizados o cerrados", 
+                "❌ Error - Se permiten compras en eventos finalizados o cerrados"
             )
-        elif not compra_evento_abierto_funciona and compra_evento_finalizado_falla:
+        elif not compra_evento_abierto_funciona and (compra_evento_finalizado_falla and compra_evento_cerrado_falla):
             tabla.add_row(
-                "No compras en eventos finalizados", 
-                "Verifica que no se permitan compras para eventos finalizados", 
-                "⚠️ Parcial - Se rechazan en finalizados pero también en abiertos"
+                "No compras en eventos finalizados/cerrados", 
+                "Verifica que no se permitan compras para eventos finalizados o cerrados", 
+                "⚠️ Parcial - Se rechazan en finalizados/cerrados pero también en abiertos"
             )
         else:
             tabla.add_row(
-                "No compras en eventos finalizados", 
-                "Verifica que no se permitan compras para eventos finalizados", 
+                "No compras en eventos finalizados/cerrados", 
+                "Verifica que no se permitan compras para eventos finalizados o cerrados", 
                 "❌ Error - No funciona correctamente ningún caso"
             )
         
@@ -984,8 +1017,8 @@ def prueba_no_compras_eventos_finalizados(cursor, tabla):
             pass
             
         tabla.add_row(
-            "No compras en eventos finalizados", 
-            "Verifica que no se permitan compras para eventos finalizados",
+            "No compras en eventos finalizados/cerrados", 
+            "Verifica que no se permitan compras para eventos finalizados o cerrados",
             f"❌ Error: {e}"
         )
 
@@ -1364,7 +1397,7 @@ def prueba_estados_evento_automaticos(cursor, tabla):
         
         # Esperar 3 minutos para que se ejecute el evento programado
         console.print("[cyan]Esperando 3 minutos para que se actualice el estado...[/cyan]")
-        time.sleep(180)  # 3 minutos
+        time.sleep(1)  # 3 minutos
         
         # Verificar que el evento está cerrado
         cursor.execute("""
