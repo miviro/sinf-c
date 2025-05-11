@@ -267,8 +267,9 @@ def poblar_base_datos():
         localidades_por_evento_count = {}
         
         with tqdm(total=min(total_localidades, total_aforo_disponible), desc="Generando localidades") as pbar:
-            for fecha_ev, rec_id_ev, esp_id_ev, aforo_ev in eventos_data_for_localidades:
-                if localidades_generadas >= total_localidades: break
+            for event_idx, (fecha_ev, rec_id_ev, esp_id_ev, aforo_ev) in enumerate(eventos_data_for_localidades):
+                if localidades_generadas >= total_localidades: 
+                    break
 
                 evento_key = (fecha_ev, rec_id_ev, esp_id_ev)
                 cursor.execute("SELECT tipo_usuario FROM Espectaculo_TipoUsuario WHERE espectaculo_id = %s", (esp_id_ev,))
@@ -282,21 +283,15 @@ def poblar_base_datos():
                     while len(precios_unicos) < 2 : precios_unicos.append(random.randint(min_precio, max_precio+1))
                     precios_calculados_evento[tipo_usr] = precios_unicos[:random.randint(1, min(4, len(precios_unicos)))]
 
-                # Determine how many localities to generate for THIS event
-                # Distribute remaining needed localities somewhat evenly among remaining events
-                # but cap by aforo_ev
-                localidades_restantes_total = total_localidades - localidades_generadas
-                num_eventos_restantes = max(1, eventos_count - eventos_data_for_localidades.index((fecha_ev, rec_id_ev, esp_id_ev, aforo_ev)))
-                
-                # Calculate base number of localidades for this event
-                localidades_a_generar_para_este_evento = min(
-                    aforo_ev,  # Can't exceed venue capacity
-                    max(1, localidades_restantes_total // num_eventos_restantes)  # At least 1 if we have remaining localidades
-                )
-                
-                # If we're close to the end and still have localidades to generate, use remaining capacity
-                if localidades_restantes_total > 0 and localidades_a_generar_para_este_evento < aforo_ev:
-                    localidades_a_generar_para_este_evento = min(aforo_ev, localidades_restantes_total)
+                # Calcular dinámicamente cuántas localidades generar para este evento
+                localidades_aun_necesarias = total_localidades - localidades_generadas
+                if localidades_aun_necesarias <= 0:
+                    localidades_a_generar_para_este_evento = 0
+                else:
+                    eventos_restantes_incluyendo_actual = eventos_count - event_idx
+                    # Calcular la cuota ideal para este evento (división por redondeo hacia arriba)
+                    ideal_share_for_this_event = (localidades_aun_necesarias + eventos_restantes_incluyendo_actual - 1) // eventos_restantes_incluyendo_actual
+                    localidades_a_generar_para_este_evento = min(aforo_ev, ideal_share_for_this_event, localidades_aun_necesarias)
                 
                 if localidades_a_generar_para_este_evento <= 0:
                     continue
@@ -304,13 +299,16 @@ def poblar_base_datos():
                 localidades_batch_data = []
                 costes_batch_data = []
 
-                for ubicacion_num in range(1, localidades_a_generar_para_este_evento + 1):
-                    if localidades_generadas >= total_localidades: break
+                # Generar localidades hasta alcanzar el número deseado o el límite del recinto
+                ubicacion_num = 1
+                while ubicacion_num <= localidades_a_generar_para_este_evento and localidades_generadas < total_localidades:
                     localidades_batch_data.append((ubicacion_num, fecha_ev, rec_id_ev, esp_id_ev))
                     for tipo_usr_coste in tipos_permitidos_db:
                         if precios_calculados_evento[tipo_usr_coste]:
                             precio_final = random.choice(precios_calculados_evento[tipo_usr_coste])
                             costes_batch_data.append((ubicacion_num, fecha_ev, rec_id_ev, esp_id_ev, tipo_usr_coste, precio_final))
+                    ubicacion_num += 1
+
                 if localidades_batch_data:
                     try:
                         cursor.executemany(insert_localidad_stmt, localidades_batch_data)
@@ -323,7 +321,12 @@ def poblar_base_datos():
                         pbar.update(localidades_generadas_este_batch)
                     except mysql.connector.Error as err_batch:
                         conn.rollback()
-                if localidades_generadas >= total_localidades: break
+                        console.print(f"[bold red]Error al insertar batch: {err_batch}")
+                        continue
+
+                # Verificar si necesitamos continuar con más eventos
+                if localidades_generadas >= total_localidades:
+                    break
         
         conn.autocommit = True
         console.print(f"\n[bold green]¡Base de datos poblada con éxito! Se generaron {localidades_generadas} localidades.")

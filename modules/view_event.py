@@ -34,7 +34,10 @@ def ver_evento():
                 e.espectaculo_id,
                 esp.nombre as nombre_espectaculo,
                 r.id_nombre as nombre_recinto,
-                COUNT(l.ubicacion) as total_localidades,
+                (SELECT COUNT(*) FROM Localidad l2 
+                 WHERE l2.fecha = e.fecha 
+                 AND l2.recinto_id = e.recinto_id 
+                 AND l2.espectaculo_id = e.espectaculo_id) as total_localidades,
                 SUM(CASE WHEN t.estado = 'compra' THEN 1 ELSE 0 END) as compradas,
                 SUM(CASE WHEN t.estado = 'reserva' THEN 1 ELSE 0 END) as reservadas,
                 e.cancelaciones,
