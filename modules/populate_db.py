@@ -197,10 +197,20 @@ def poblar_base_datos():
         
         console.print(f"[bold blue]Aforo total disponible: {total_aforo_disponible}, necesario: {total_localidades}")
         
-        if total_aforo_disponible < total_localidades:
-            console.print(f"[bold yellow]Generando eventos adicionales para alcanzar {total_localidades} localidades...[/bold yellow]")
+        # Define a target aforo with a buffer (e.g., 5%) to increase chances of meeting total_localidades
+        # Ensure target_aforo is at least total_localidades, especially if total_localidades is small.
+        buffer_percentage = 0.05
+        target_aforo = total_localidades + int(total_localidades * buffer_percentage)
+        if target_aforo == total_localidades and total_localidades > 0: # Ensure at least a small absolute buffer for small counts if % is too small
+            target_aforo = total_localidades + 10 # Or some other small fixed buffer, adjust as needed. For larger numbers, % is fine.
+                                                # For simplicity here, let's ensure it's at least total_localidades + 1 if product is 0.
+            if int(total_localidades * buffer_percentage) == 0 and total_localidades > 0 : target_aforo = total_localidades +1
+
+
+        if total_aforo_disponible < target_aforo:
+            console.print(f"[bold yellow]Generando eventos adicionales para alcanzar un aforo objetivo de {target_aforo} (localidades solicitadas: {total_localidades})...[/bold yellow]")
             eventos_adicionales_necesarios = []
-            while total_aforo_disponible < total_localidades:
+            while total_aforo_disponible < target_aforo:
                 # Seleccionar un recinto aleatorio
                 rec_id, aforo = random.choice(recintos_insertados)
                 # Seleccionar un espectáculo aleatorio
@@ -237,7 +247,7 @@ def poblar_base_datos():
             eventos_data_for_localidades.extend(eventos_adicionales_necesarios)
             eventos_count = len(eventos_data_for_localidades)
             console.print(f"[bold green]Se crearon {len(eventos_adicionales_necesarios)} eventos adicionales[/bold green]")
-            console.print(f"[bold blue]Nuevo aforo total disponible: {total_aforo_disponible}[/bold blue]")
+            console.print(f"[bold blue]Nuevo aforo total disponible: {total_aforo_disponible} (objetivo inicial de localidades: {total_localidades})[/bold blue]")
         
         eventos_count = len(eventos_data_for_localidades)
         
@@ -285,13 +295,7 @@ def poblar_base_datos():
 
                 # Calcular dinámicamente cuántas localidades generar para este evento
                 localidades_aun_necesarias = total_localidades - localidades_generadas
-                if localidades_aun_necesarias <= 0:
-                    localidades_a_generar_para_este_evento = 0
-                else:
-                    eventos_restantes_incluyendo_actual = eventos_count - event_idx
-                    # Calcular la cuota ideal para este evento (división por redondeo hacia arriba)
-                    ideal_share_for_this_event = (localidades_aun_necesarias + eventos_restantes_incluyendo_actual - 1) // eventos_restantes_incluyendo_actual
-                    localidades_a_generar_para_este_evento = min(aforo_ev, ideal_share_for_this_event, localidades_aun_necesarias)
+                localidades_a_generar_para_este_evento = min(aforo_ev, localidades_aun_necesarias)
                 
                 if localidades_a_generar_para_este_evento <= 0:
                     continue
