@@ -350,6 +350,7 @@ def simular_usuarios(num_usuarios_concurrentes, console, db_config_params):
             console.print(f"[yellow]Advertencia: No se pudieron limpiar todas las conexiones: {e}[/yellow]")
         
         console.print("[bold green]Simulación y generador de eventos detenidos.[/bold green]")
+        return  # Add return statement to exit the function properly
 
 def simular():
     """Interfaz para configurar y ejecutar la simulación continua."""
@@ -368,4 +369,5 @@ def simular():
     except Exception as e:
         console.print(f"[bold red]Error inesperado durante la configuración de la simulación: {e}[/bold red]")
     finally:
-        console.print("\n[bold blue]Simulación finalizada o interrumpida.[/bold blue]") 
+        console.print("\n[bold blue]Simulación finalizada o interrumpida.[/bold blue]")
+        return  # Add return statement to exit the function properly 

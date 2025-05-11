@@ -288,11 +288,18 @@ def poblar_base_datos():
                 localidades_restantes_total = total_localidades - localidades_generadas
                 num_eventos_restantes = max(1, eventos_count - eventos_data_for_localidades.index((fecha_ev, rec_id_ev, esp_id_ev, aforo_ev)))
                 
-                ideal_para_este_evento = localidades_restantes_total // num_eventos_restantes
-                localidades_a_generar_para_este_evento = min(aforo_ev, ideal_para_este_evento, localidades_restantes_total)
-                if localidades_a_generar_para_este_evento <=0 and localidades_restantes_total > 0 : # if not enough from ideal, take what's possible
+                # Calculate base number of localidades for this event
+                localidades_a_generar_para_este_evento = min(
+                    aforo_ev,  # Can't exceed venue capacity
+                    max(1, localidades_restantes_total // num_eventos_restantes)  # At least 1 if we have remaining localidades
+                )
+                
+                # If we're close to the end and still have localidades to generate, use remaining capacity
+                if localidades_restantes_total > 0 and localidades_a_generar_para_este_evento < aforo_ev:
                     localidades_a_generar_para_este_evento = min(aforo_ev, localidades_restantes_total)
-                if localidades_a_generar_para_este_evento <=0 : continue
+                
+                if localidades_a_generar_para_este_evento <= 0:
+                    continue
                 
                 localidades_batch_data = []
                 costes_batch_data = []
