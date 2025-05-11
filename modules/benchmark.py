@@ -13,7 +13,7 @@ def generar_benchmark_sql():
         num_compras = int(Prompt.ask("\nNúmero de compras a generar", default="1000"))
         num_reservas = int(Prompt.ask("Número de reservas a generar", default="500"))
         num_anulaciones = int(Prompt.ask("Número de anulaciones a generar", default="200"))
-        num_consultas = int(Prompt.ask("Número de consultas a generar", default="300"))
+        num_consultas = int(Prompt.ask("Número de consultas a generar (muy caras)", default="0"))
         
         if num_compras < 0 or num_reservas < 0 or num_anulaciones < 0 or num_consultas < 0:
             console.print("[bold red]Los números no pueden ser negativos")
