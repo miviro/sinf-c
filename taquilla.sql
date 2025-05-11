@@ -69,7 +69,7 @@ CREATE TABLE Coste (
 CREATE TABLE Transaccion (
   id_transaccion INT PRIMARY KEY AUTO_INCREMENT,
   datos_bancarios VARCHAR(255) NOT NULL,
-  estado ENUM('compra', 'reserva', 'anulada') NOT NULL,
+  estado ENUM('compra', 'reserva') NOT NULL,
   ubicacion INT NOT NULL,
   fecha DATETIME NOT NULL,
   recinto_id VARCHAR(255) NOT NULL,
@@ -100,12 +100,20 @@ BEGIN
     DECLARE v_espectaculo_id INT;
     DECLARE v_estado VARCHAR(20);
     DECLARE v_transaction_datos_bancarios VARCHAR(255);
+    DECLARE v_estado_evento ENUM('Finalizado', 'Abierto', 'Cerrado');
     
     -- Get the transaction details
     SELECT fecha, recinto_id, espectaculo_id, estado, datos_bancarios 
     INTO v_fecha, v_recinto_id, v_espectaculo_id, v_estado, v_transaction_datos_bancarios
     FROM Transaccion 
     WHERE id_transaccion = p_id_transaccion;
+    
+    -- Get the event state
+    SELECT estado INTO v_estado_evento
+    FROM Evento
+    WHERE fecha = v_fecha 
+    AND recinto_id = v_recinto_id 
+    AND espectaculo_id = v_espectaculo_id;
     
     -- Check if the transaction exists and is a reservation
     IF v_estado IS NULL THEN
@@ -117,6 +125,9 @@ BEGIN
     ELSEIF v_transaction_datos_bancarios != p_datos_bancarios THEN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'Unauthorized: datos_bancarios do not match';
+    ELSEIF v_estado_evento != 'Abierto' THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Only reservations for open events can be canceled';
     END IF;
     
     -- Start transaction
@@ -194,28 +205,6 @@ END;
 //
 DELIMITER ;
 
--- Impedir que un usuario pueda anular una reserva con menos de una hora de antelación
-DELIMITER //
-
-DROP TRIGGER IF EXISTS impedir_anulacion_evento_proximo;
-
-CREATE TRIGGER impedir_anulacion_evento_proximo
-BEFORE UPDATE ON Transaccion
-FOR EACH ROW
-BEGIN
-    -- Si se quiere anular la transaccion
-    IF NEW.estado = 'Anulada' THEN
-        -- Comprobamos si la fecha del evento está a menos de 1 hora
-        IF TIMESTAMPDIFF(MINUTE, NOW(), NEW.fecha) < 60 THEN
-            SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'No puede anular su reserva con menos de 1 hora de antelación';
-        END IF;
-    END IF;
-END;
-//
-
-DELIMITER ;
-
 -- Limitar las compras de un cliente a 10
 DELIMITER //
 CREATE TRIGGER check_ticket_limit
@@ -238,6 +227,27 @@ BEGIN
 END//
 DELIMITER ;
 
+-- Trigger para convertir reservas en compras cuando el evento se cierra
+DELIMITER //
+DROP TRIGGER IF EXISTS convertir_reservas_en_compras;
+CREATE TRIGGER convertir_reservas_en_compras
+AFTER UPDATE ON Evento
+FOR EACH ROW
+BEGIN
+    IF NEW.estado = 'Cerrado' AND OLD.estado = 'Abierto' THEN
+        -- Actualizar todas las reservas a compras
+        UPDATE Transaccion 
+        SET estado = 'compra'
+        WHERE fecha = NEW.fecha 
+        AND recinto_id = NEW.recinto_id 
+        AND espectaculo_id = NEW.espectaculo_id
+        AND estado = 'reserva';
+    END IF;
+END//
+DELIMITER ;
+
+
+
 -- ================================
 -- VISTAS
 -- ================================
@@ -254,8 +264,8 @@ SELECT
     SUM(CASE WHEN Transaccion.estado = 'compra' THEN 1 ELSE 0 END) AS aforo_vendido,
     -- Sumo las transacciones cuando su estado es 'reserva'
     SUM(CASE WHEN Transaccion.estado = 'reserva' THEN 1 ELSE 0 END) AS aforo_reservado,
-      -- Sumo las transacciones cuando su estado es 'anulada'
-    SUM(CASE WHEN Transaccion.estado = 'anulada' THEN 1 ELSE 0 END) AS aforo_anulado,
+    -- Uso el atributo cancelaciones de Evento
+    Evento.cancelaciones AS aforo_anulado,
     Recinto.aforo_max
 
 FROM Transaccion
@@ -266,7 +276,7 @@ JOIN Evento ON Evento.recinto_id = Transaccion.recinto_id
 
 JOIN Recinto ON Evento.recinto_id = Recinto.id_nombre
 
-GROUP BY Evento.recinto_id, Evento.espectaculo_id, Evento.fecha, Recinto.aforo_max;
+GROUP BY Evento.recinto_id, Evento.espectaculo_id, Evento.fecha, Recinto.aforo_max, Evento.cancelaciones;
 
 -- Vista para ver los beneficios de los eventos
 DROP VIEW IF EXISTS Vista_Beneficios_Evento;
@@ -332,7 +342,7 @@ LEFT JOIN Transaccion ON Transaccion.recinto_id = Coste.recinto_id
    AND Transaccion.espectaculo_id = Coste.espectaculo_id
    AND Transaccion.ubicacion = Coste.ubicacion
 JOIN Evento on Evento.espectaculo_id = Coste.espectaculo_id
-WHERE (Transaccion.ubicacion IS NULL OR Transaccion.estado = 'Anulada')
+WHERE (Transaccion.ubicacion IS NULL)
       AND Evento.estado = 'Abierto'
       
 GROUP BY Coste.fecha, Coste.recinto_id, Coste.espectaculo_id, Coste.precio, Coste.tipo_usuario, Coste.ubicacion;
@@ -345,48 +355,64 @@ CREATE VIEW Vista_Top10_espectaculos AS
 SELECT 
     e.id_espectaculo,
     e.nombre AS nombre_espectaculo,
-    SUM(c.precio) AS beneficios_totales
-FROM Transaccion t
-JOIN Coste c ON t.ubicacion = c.ubicacion
-            AND t.fecha = c.fecha
-            AND t.recinto_id = c.recinto_id
-            AND t.espectaculo_id = c.espectaculo_id
-            AND t.tipo_usuario = c.tipo_usuario
-JOIN Espectaculo e ON t.espectaculo_id = e.id_espectaculo
+    SUM(c.precio) as total_ingresos
+FROM Espectaculo e
+JOIN Evento ev ON e.id_espectaculo = ev.espectaculo_id
+JOIN Localidad l ON ev.fecha = l.fecha AND ev.recinto_id = l.recinto_id AND ev.espectaculo_id = l.espectaculo_id
+JOIN Coste c ON l.ubicacion = c.ubicacion AND l.fecha = c.fecha AND l.recinto_id = c.recinto_id AND l.espectaculo_id = c.espectaculo_id
+JOIN Transaccion t ON c.ubicacion = t.ubicacion AND c.fecha = t.fecha AND c.recinto_id = t.recinto_id AND c.espectaculo_id = t.espectaculo_id AND c.tipo_usuario = t.tipo_usuario
 WHERE t.estado = 'compra'
 GROUP BY e.id_espectaculo, e.nombre
-ORDER BY beneficios_totales DESC
+ORDER BY total_ingresos DESC
 LIMIT 10;
 
+-- ================================
+-- EVENTOS PROGRAMADOS
+-- ================================
 
--- ========================================
--- USUARIOS Y PERMISOS
--- =======================================
+-- Tabla para registrar violaciones de aforo
+CREATE TABLE IF NOT EXISTS Auditoria_Aforo (
+    id_auditoria INT PRIMARY KEY AUTO_INCREMENT,
+    fecha_verificacion DATETIME NOT NULL,
+    fecha_evento DATETIME NOT NULL,
+    recinto_id VARCHAR(255) NOT NULL,
+    espectaculo_id INT NOT NULL,
+    aforo_maximo INT NOT NULL,
+    localidades_actuales INT NOT NULL,
+    FOREIGN KEY (fecha_evento, recinto_id, espectaculo_id) REFERENCES Evento(fecha, recinto_id, espectaculo_id)
+);
 
--- Crear usuarios
-DROP USER IF EXISTS 'cliente'@'localhost';
-DROP USER IF EXISTS 'admin'@'localhost';
+-- Procedimiento para verificar el aforo de los eventos
+DELIMITER //
+CREATE PROCEDURE verificar_aforo_eventos()
+BEGIN
+    -- Insertar en la tabla de auditoría los eventos que superan el aforo
+    INSERT INTO Auditoria_Aforo (
+        fecha_verificacion,
+        fecha_evento,
+        recinto_id,
+        espectaculo_id,
+        aforo_maximo,
+        localidades_actuales
+    )
+    SELECT 
+        NOW(),
+        e.fecha,
+        e.recinto_id,
+        e.espectaculo_id,
+        r.aforo_max,
+        COUNT(l.ubicacion) as num_localidades
+    FROM Evento e
+    JOIN Recinto r ON e.recinto_id = r.id_nombre
+    JOIN Localidad l ON e.fecha = l.fecha 
+        AND e.recinto_id = l.recinto_id 
+        AND e.espectaculo_id = l.espectaculo_id
+    WHERE e.estado IN ('Abierto', 'Cerrado')
+    GROUP BY e.fecha, e.recinto_id, e.espectaculo_id, r.aforo_max
+    HAVING COUNT(l.ubicacion) > r.aforo_max;
+END//
+DELIMITER ;
 
-CREATE USER 'cliente'@'localhost' IDENTIFIED BY '1234';
-CREATE USER 'admin'@'localhost' IDENTIFIED BY '1234';
-
--- Permisos para cliente
-GRANT SELECT, INSERT, UPDATE ON taquilla.Cliente TO 'cliente'@'localhost';
-GRANT SELECT, INSERT, UPDATE ON taquilla.Transaccion TO 'cliente'@'localhost';
-GRANT SELECT ON taquilla.Espectaculo TO 'cliente'@'localhost';
-GRANT SELECT ON taquilla.Evento TO 'cliente'@'localhost';
-GRANT SELECT ON taquilla.Localidad TO 'cliente'@'localhost';
-GRANT SELECT ON taquilla.Espectaculo_TipoUsuario TO 'cliente'@'localhost';
-GRANT SELECT ON taquilla.Coste TO 'cliente'@'localhost';
-
-GRANT SELECT ON taquilla.Vista_precio_entradas_libres_evento TO 'cliente'@'localhost';
-GRANT SELECT ON taquilla.Vista_eventos_abiertos_para_espectaculo TO 'cliente'@'localhost';
-GRANT SELECT ON taquilla.Vista_eventos_por_fecha TO 'cliente'@'localhost';
-
--- Permisos para admin
-GRANT ALL PRIVILEGES ON taquilla.* TO 'admin'@'localhost';
 
 
-GRANT SELECT ON taquilla.Vista_aforo_evento TO 'admin'@'localhost';
-GRANT SELECT ON taquilla.Vista_Top10_espectaculos TO 'admin'@'localhost';
-GRANT SELECT ON taquilla.Vista_Beneficios_Evento TO 'admin'@'localhost';
+
