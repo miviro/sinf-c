@@ -413,6 +413,27 @@ BEGIN
 END//
 DELIMITER ;
 
+-- Procedimiento para cerrar eventos 1h antes de que empiecen
+DELIMITER //
+DROP PROCEDURE IF EXISTS cerrar_eventos;
+CREATE PROCEDURE cerrar_eventos()
+BEGIN
+    UPDATE Evento 
+    SET estado = 'Cerrado'
+    WHERE estado = 'Abierto'
+    AND TIMESTAMPDIFF(MINUTE, NOW(), fecha) <= 60
+    AND TIMESTAMPDIFF(MINUTE, NOW(), fecha) >= -60;
+END//
+DELIMITER ;
 
-
-
+-- Procedimiento para finalizar eventos cuando acaben
+DELIMITER //
+DROP PROCEDURE IF EXISTS finalizar_eventos;
+CREATE PROCEDURE finalizar_eventos()
+BEGIN
+    UPDATE Evento 
+    SET estado = 'Finalizado'
+    WHERE estado IN ('Abierto', 'Cerrado')
+    AND fecha_fin < NOW();
+END//
+DELIMITER ; 

@@ -1353,8 +1353,8 @@ def prueba_estados_evento_automaticos(cursor, tabla):
             )
             return
 
-        # Crear un evento que empiece en 1 hora y 2 minutos
-        fecha_inicio = datetime.now() + timedelta(hours=1, minutes=2)
+        # Crear un evento que empiece en exactamente 30 minutos (dentro del rango de 60 minutos)
+        fecha_inicio = datetime.now() + timedelta(minutes=30)
         fecha_fin = fecha_inicio + timedelta(hours=2)
             
         # Insertar datos de prueba
@@ -1363,12 +1363,13 @@ def prueba_estados_evento_automaticos(cursor, tabla):
             VALUES (%s, 100)
             ON DUPLICATE KEY UPDATE aforo_max = 100
         """, (recinto_test,))
-        cursor.fetchall()
+        cursor.execute("COMMIT")
         
         cursor.execute("""
             INSERT INTO Espectaculo (nombre, tipo) 
             VALUES (%s, 'Musical')
         """, (espectaculo_nombre,))
+        cursor.execute("COMMIT")
         
         # Obtener el ID del espectáculo insertado
         cursor.execute("SELECT LAST_INSERT_ID()")
@@ -1379,31 +1380,58 @@ def prueba_estados_evento_automaticos(cursor, tabla):
             INSERT INTO Espectaculo_TipoUsuario (espectaculo_id, tipo_usuario)
             VALUES (%s, 'Adulto')
         """, (espectaculo_id,))
-        cursor.fetchall()
+        cursor.execute("COMMIT")
+        
+        # Formatear la fecha como string para evitar problemas
+        fecha_inicio_str = fecha_inicio.strftime('%Y-%m-%d %H:%M:%S')
+        fecha_fin_str = fecha_fin.strftime('%Y-%m-%d %H:%M:%S')
         
         cursor.execute("""
             INSERT INTO Evento (fecha, fecha_fin, recinto_id, espectaculo_id, estado)
             VALUES (%s, %s, %s, %s, 'Abierto')
-        """, (fecha_inicio, fecha_fin, recinto_test, espectaculo_id))
-        cursor.fetchall()
+        """, (fecha_inicio_str, fecha_fin_str, recinto_test, espectaculo_id))
+        cursor.execute("COMMIT")
+        
+        # Verificar inserción del evento
+        cursor.execute("""
+            SELECT COUNT(*) FROM Evento 
+            WHERE recinto_id = %s AND espectaculo_id = %s
+        """, (recinto_test, espectaculo_id))
+        count = cursor.fetchone()[0]
+        
+        if count == 0:
+            tabla.add_row(
+                "Estados automáticos", 
+                "Verifica que los eventos se cierren automáticamente 1h antes", 
+                "❌ Error - No se pudo crear el evento de prueba"
+            )
+            return
 
-        # Verificar estado inicial
+        # Verificar estado inicial con consulta simplificada
         cursor.execute("""
             SELECT estado FROM Evento 
-            WHERE recinto_id = %s AND espectaculo_id = %s AND fecha = %s
-        """, (recinto_test, espectaculo_id, fecha_inicio))
+            WHERE recinto_id = %s AND espectaculo_id = %s
+        """, (recinto_test, espectaculo_id))
         estado_inicial = cursor.fetchone()
         console.print(f"[cyan]Estado inicial del evento: {estado_inicial[0] if estado_inicial else 'No encontrado'}[/cyan]")
         
-        # Esperar 3 minutos para que se ejecute el evento programado
-        console.print("[cyan]Esperando 3 minutos para que se actualice el estado...[/cyan]")
-        time.sleep(1)  # 3 minutos
+        if not estado_inicial or estado_inicial[0] != 'Abierto':
+            tabla.add_row(
+                "Estados automáticos", 
+                "Verifica que los eventos se cierren automáticamente 1h antes", 
+                f"❌ Error - Estado inicial incorrecto: {estado_inicial[0] if estado_inicial else 'No encontrado'}"
+            )
+            return
         
-        # Verificar que el evento está cerrado
+        # Llamar al procedimiento para cerrar eventos
+        cursor.execute("CALL cerrar_eventos()")
+        cursor.execute("COMMIT")
+        
+        # Verificar que el evento está cerrado con consulta simplificada
         cursor.execute("""
             SELECT estado FROM Evento 
-            WHERE recinto_id = %s AND espectaculo_id = %s AND fecha = %s
-        """, (recinto_test, espectaculo_id, fecha_inicio))
+            WHERE recinto_id = %s AND espectaculo_id = %s
+        """, (recinto_test, espectaculo_id))
         estado_final = cursor.fetchone()
         console.print(f"[cyan]Estado final del evento: {estado_final[0] if estado_final else 'No encontrado'}[/cyan]")
         
@@ -1428,22 +1456,20 @@ def prueba_estados_evento_automaticos(cursor, tabla):
     finally:
         # Limpiar datos de prueba
         try:
-            if fecha_inicio and recinto_test and espectaculo_id:
-                cursor.execute("DELETE FROM Transaccion WHERE recinto_id = %s AND espectaculo_id = %s", (recinto_test, espectaculo_id))
-                cursor.fetchall()
-                cursor.execute("DELETE FROM Coste WHERE recinto_id = %s AND espectaculo_id = %s", (recinto_test, espectaculo_id))
-                cursor.fetchall()
-                cursor.execute("DELETE FROM Localidad WHERE recinto_id = %s AND espectaculo_id = %s", (recinto_test, espectaculo_id))
-                cursor.fetchall()
-                cursor.execute("DELETE FROM Evento WHERE recinto_id = %s AND espectaculo_id = %s", (recinto_test, espectaculo_id))
-                cursor.fetchall()
+            if espectaculo_id:
+                cursor.execute("DELETE FROM Transaccion WHERE espectaculo_id = %s", (espectaculo_id,))
+                cursor.execute("DELETE FROM Coste WHERE espectaculo_id = %s", (espectaculo_id,))
+                cursor.execute("DELETE FROM Localidad WHERE espectaculo_id = %s", (espectaculo_id,))
+                cursor.execute("DELETE FROM Evento WHERE espectaculo_id = %s", (espectaculo_id,))
                 cursor.execute("DELETE FROM Espectaculo_TipoUsuario WHERE espectaculo_id = %s", (espectaculo_id,))
-                cursor.fetchall()
                 cursor.execute("DELETE FROM Espectaculo WHERE id_espectaculo = %s", (espectaculo_id,))
-                cursor.fetchall()
+                cursor.execute("COMMIT")
+            
+            if recinto_test:
                 cursor.execute("DELETE FROM Recinto WHERE id_nombre = %s", (recinto_test,))
-                cursor.fetchall()
-        except:
+                cursor.execute("COMMIT")
+        except Exception as e:
+            console.print(f"[red]Error al limpiar datos: {e}[/red]")
             # Ignorar errores de limpieza
             pass
 
@@ -1455,9 +1481,13 @@ def prueba_conversion_reservas_a_compras(cursor, tabla):
     fecha_inicio = None
     
     try:
-        # Crear un evento que empiece en 2 minutos
-        fecha_inicio = datetime.now() + timedelta(minutes=2)
+        # Crear un evento que empiece en exactamente 30 minutos (dentro del rango de 60 minutos)
+        fecha_inicio = datetime.now() + timedelta(minutes=30)
         fecha_fin = fecha_inicio + timedelta(hours=2)
+        
+        # Formatear las fechas como string para evitar problemas
+        fecha_inicio_str = fecha_inicio.strftime('%Y-%m-%d %H:%M:%S')
+        fecha_fin_str = fecha_fin.strftime('%Y-%m-%d %H:%M:%S')
         
         # Insertar datos de prueba
         cursor.execute("""
@@ -1465,11 +1495,13 @@ def prueba_conversion_reservas_a_compras(cursor, tabla):
             VALUES (%s, 100)
             ON DUPLICATE KEY UPDATE aforo_max = 100
         """, (recinto_test,))
+        cursor.execute("COMMIT")
         
         cursor.execute("""
             INSERT INTO Espectaculo (nombre, tipo) 
             VALUES (%s, 'Musical')
         """, (espectaculo_nombre,))
+        cursor.execute("COMMIT")
         
         # Obtener el ID del espectáculo insertado
         cursor.execute("SELECT LAST_INSERT_ID()")
@@ -1480,22 +1512,62 @@ def prueba_conversion_reservas_a_compras(cursor, tabla):
             INSERT INTO Espectaculo_TipoUsuario (espectaculo_id, tipo_usuario)
             VALUES (%s, 'Adulto')
         """, (espectaculo_id,))
+        cursor.execute("COMMIT")
         
         cursor.execute("""
             INSERT INTO Evento (fecha, fecha_fin, recinto_id, espectaculo_id, estado)
             VALUES (%s, %s, %s, %s, 'Abierto')
-        """, (fecha_inicio, fecha_fin, recinto_test, espectaculo_id))
+        """, (fecha_inicio_str, fecha_fin_str, recinto_test, espectaculo_id))
+        cursor.execute("COMMIT")
+        
+        # Verificar inserción del evento
+        cursor.execute("""
+            SELECT COUNT(*) FROM Evento 
+            WHERE recinto_id = %s AND espectaculo_id = %s
+        """, (recinto_test, espectaculo_id))
+        count = cursor.fetchone()[0]
+        
+        if count == 0:
+            tabla.add_row(
+                "Conversión reservas a compras", 
+                "Verifica que las reservas se conviertan en compras al cerrar el evento", 
+                "❌ Error - No se pudo crear el evento de prueba"
+            )
+            return
         
         # Insertar localidad y coste
         cursor.execute("""
             INSERT INTO Localidad (ubicacion, fecha, recinto_id, espectaculo_id)
             VALUES (1, %s, %s, %s)
-        """, (fecha_inicio, recinto_test, espectaculo_id))
+        """, (fecha_inicio_str, recinto_test, espectaculo_id))
+        cursor.execute("COMMIT")
         
         cursor.execute("""
             INSERT INTO Coste (ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario, precio)
             VALUES (1, %s, %s, %s, 'Adulto', 20)
-        """, (fecha_inicio, recinto_test, espectaculo_id))
+        """, (fecha_inicio_str, recinto_test, espectaculo_id))
+        cursor.execute("COMMIT")
+        
+        # Verificar inserción de localidad y coste
+        cursor.execute("""
+            SELECT COUNT(*) FROM Localidad 
+            WHERE recinto_id = %s AND espectaculo_id = %s
+        """, (recinto_test, espectaculo_id))
+        count_localidad = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            SELECT COUNT(*) FROM Coste 
+            WHERE recinto_id = %s AND espectaculo_id = %s
+        """, (recinto_test, espectaculo_id))
+        count_coste = cursor.fetchone()[0]
+        
+        if count_localidad == 0 or count_coste == 0:
+            tabla.add_row(
+                "Conversión reservas a compras", 
+                "Verifica que las reservas se conviertan en compras al cerrar el evento", 
+                "❌ Error - No se pudo crear la localidad o el coste"
+            )
+            return
         
         # Insertar cliente de prueba
         cursor.execute("""
@@ -1503,42 +1575,44 @@ def prueba_conversion_reservas_a_compras(cursor, tabla):
             VALUES ('987654321')
             ON DUPLICATE KEY UPDATE datos_bancarios = '987654321'
         """)
+        cursor.execute("COMMIT")
         
         # Hacer una reserva
-        reserva_exitosa = True
         try:
             cursor.execute("""
                 INSERT INTO Transaccion (datos_bancarios, estado, ubicacion, fecha, recinto_id, espectaculo_id, tipo_usuario)
                 VALUES ('987654321', 'reserva', 1, %s, %s, %s, 'Adulto')
-            """, (fecha_inicio, recinto_test, espectaculo_id))
-        except mysql.connector.Error:
-            reserva_exitosa = False
-        
-        # Verificar que la transacción está como reserva
-        if reserva_exitosa:
-            cursor.execute("""
-                SELECT estado FROM Transaccion 
-                WHERE fecha = %s AND recinto_id = %s
-            """, (fecha_inicio, recinto_test))
-            estado_inicial = cursor.fetchone()
-            
-            if not estado_inicial or estado_inicial[0] != 'reserva':
-                tabla.add_row(
-                    "Conversión reservas a compras", 
-                    "Verifica que las reservas se conviertan en compras al cerrar el evento", 
-                    "❌ Error - No se pudo verificar el estado inicial de la reserva"
-                )
-                return
-        else:
+            """, (fecha_inicio_str, recinto_test, espectaculo_id))
+            cursor.execute("COMMIT")
+            console.print("[cyan]Reserva creada correctamente[/cyan]")
+        except mysql.connector.Error as e:
+            console.print(f"[red]Error al crear reserva: {e}[/red]")
             tabla.add_row(
                 "Conversión reservas a compras", 
                 "Verifica que las reservas se conviertan en compras al cerrar el evento", 
-                "❌ Error - No se pudo crear la reserva inicial"
+                f"❌ Error - No se pudo crear la reserva: {e}"
+            )
+            return
+        
+        # Verificar que la transacción está como reserva
+        cursor.execute("""
+            SELECT estado FROM Transaccion 
+            WHERE recinto_id = %s AND espectaculo_id = %s
+        """, (recinto_test, espectaculo_id))
+        estado_inicial = cursor.fetchone()
+        console.print(f"[cyan]Estado inicial de la transacción: {estado_inicial[0] if estado_inicial else 'No encontrado'}[/cyan]")
+        
+        if not estado_inicial or estado_inicial[0] != 'reserva':
+            tabla.add_row(
+                "Conversión reservas a compras", 
+                "Verifica que las reservas se conviertan en compras al cerrar el evento", 
+                f"❌ Error - Estado inicial incorrecto: {estado_inicial[0] if estado_inicial else 'No encontrado'}"
             )
             return
             
-        # Esperar 1 minuto para que el evento se cierre
-        time.sleep(1)
+        # Llamar al procedimiento para cerrar eventos
+        cursor.execute("CALL cerrar_eventos()")
+        cursor.execute("COMMIT")
         
         # Verificar que el evento está cerrado
         cursor.execute("""
@@ -1546,21 +1620,23 @@ def prueba_conversion_reservas_a_compras(cursor, tabla):
             WHERE recinto_id = %s AND espectaculo_id = %s
         """, (recinto_test, espectaculo_id))
         estado_evento = cursor.fetchone()
+        console.print(f"[cyan]Estado del evento después de cerrar: {estado_evento[0] if estado_evento else 'No encontrado'}[/cyan]")
         
         if not estado_evento or estado_evento[0] != 'Cerrado':
             tabla.add_row(
                 "Conversión reservas a compras", 
                 "Verifica que las reservas se conviertan en compras al cerrar el evento", 
-                "❌ Error - El evento no se cerró automáticamente"
+                f"❌ Error - El evento no se cerró automáticamente. Estado: {estado_evento[0] if estado_evento else 'No encontrado'}"
             )
             return
         
         # Verificar que la transacción se convirtió en compra
         cursor.execute("""
             SELECT estado FROM Transaccion 
-            WHERE fecha = %s AND recinto_id = %s
-        """, (fecha_inicio, recinto_test))
+            WHERE recinto_id = %s AND espectaculo_id = %s
+        """, (recinto_test, espectaculo_id))
         estado_final = cursor.fetchone()
+        console.print(f"[cyan]Estado final de la transacción: {estado_final[0] if estado_final else 'No encontrado'}[/cyan]")
         
         if estado_final and estado_final[0] == 'compra':
             tabla.add_row(
@@ -1572,7 +1648,7 @@ def prueba_conversion_reservas_a_compras(cursor, tabla):
             tabla.add_row(
                 "Conversión reservas a compras", 
                 "Verifica que las reservas se conviertan en compras al cerrar el evento", 
-                "❌ Error - La reserva no se convirtió en compra"
+                f"❌ Error - La reserva no se convirtió en compra. Estado final: {estado_final[0] if estado_final else 'No encontrado'}"
             )
     except Exception as e:
         tabla.add_row(
@@ -1580,6 +1656,25 @@ def prueba_conversion_reservas_a_compras(cursor, tabla):
             "Verifica que las reservas se conviertan en compras al cerrar el evento", 
             f"❌ Error: {e}"
         )
+    finally:
+        # Limpiar datos de prueba
+        try:
+            if espectaculo_id:
+                cursor.execute("DELETE FROM Transaccion WHERE espectaculo_id = %s", (espectaculo_id,))
+                cursor.execute("DELETE FROM Coste WHERE espectaculo_id = %s", (espectaculo_id,))
+                cursor.execute("DELETE FROM Localidad WHERE espectaculo_id = %s", (espectaculo_id,))
+                cursor.execute("DELETE FROM Evento WHERE espectaculo_id = %s", (espectaculo_id,))
+                cursor.execute("DELETE FROM Espectaculo_TipoUsuario WHERE espectaculo_id = %s", (espectaculo_id,))
+                cursor.execute("DELETE FROM Espectaculo WHERE id_espectaculo = %s", (espectaculo_id,))
+                cursor.execute("COMMIT")
+            
+            if recinto_test:
+                cursor.execute("DELETE FROM Recinto WHERE id_nombre = %s", (recinto_test,))
+                cursor.execute("COMMIT")
+        except Exception as e:
+            console.print(f"[red]Error al limpiar datos: {e}[/red]")
+            # Ignorar errores de limpieza
+            pass
 
 
 def prueba_auditoria_aforo(cursor, tabla):

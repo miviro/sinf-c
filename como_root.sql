@@ -34,35 +34,6 @@ GRANT SELECT ON taquilla.Vista_Beneficios_Evento TO 'admin'@'localhost';
 
 USE taquilla;
 
--- Evento para cerrar eventos 1h antes de que empiecen
-DELIMITER //
-DROP EVENT IF EXISTS cerrar_eventos;
-CREATE EVENT cerrar_eventos
-ON SCHEDULE EVERY 1 MINUTE
-DO
-BEGIN
-    UPDATE Evento 
-    SET estado = 'Cerrado'
-    WHERE estado = 'Abierto'
-    AND TIMESTAMPDIFF(MINUTE, NOW(), fecha) <= 60
-    AND TIMESTAMPDIFF(MINUTE, NOW(), fecha) >= -60;
-END//
-DELIMITER ;
-
--- Evento para finalizar eventos cuando acaben
-DELIMITER //
-DROP EVENT IF EXISTS finalizar_eventos;
-CREATE EVENT finalizar_eventos
-ON SCHEDULE EVERY 1 MINUTE
-DO
-BEGIN
-    UPDATE Evento 
-    SET estado = 'Finalizado'
-    WHERE estado IN ('Abierto', 'Cerrado')
-    AND fecha_fin < NOW();
-END//
-DELIMITER ; 
-
 -- Evento programado para ejecutar la verificación cada minuto
 DELIMITER //
 DROP EVENT IF EXISTS verificar_aforo_periodico;
@@ -71,5 +42,7 @@ ON SCHEDULE EVERY 1 MINUTE
 DO
 BEGIN
     CALL verificar_aforo_eventos();
+    CALL cerrar_eventos();
+    CALL finalizar_eventos();
 END//
 DELIMITER ;
